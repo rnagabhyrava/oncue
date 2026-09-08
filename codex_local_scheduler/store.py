@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 class Store:
     def __init__(self, path: Path):
+        self.path = path
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(path.parent, 0o700)
         self.connection = sqlite3.connect(path, timeout=10)

@@ -1,16 +1,20 @@
 from datetime import datetime, timezone
+from http.server import ThreadingHTTPServer
 import os
 from pathlib import Path
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import time
+from threading import Thread
 import unittest
+from urllib.request import urlopen
 
 from codex_local_scheduler.cron import fields_for, matches
-from codex_local_scheduler.dashboard import overview
+from codex_local_scheduler.dashboard import _handler, overview
 from codex_local_scheduler.runner import invocation
 from codex_local_scheduler.runner import run_job, run_queued_job
 from codex_local_scheduler.store import Store
@@ -190,11 +194,15 @@ class CronTests(unittest.TestCase):
             tick = subprocess.run(command + ["run-due"], capture_output=True, text=True, check=False)
             self.assertEqual(tick.returncode, 0)
             self.assertIn("queued-project-busy", tick.stdout)
+            store = Store(data_dir / "scheduler.sqlite3")
+            store.initialize()
+            queued_id = store.queued_runs()[0]["id"]
+            store.close()
             output, _ = manual.communicate(timeout=10)
             self.assertEqual(manual.returncode, 0, output)
-            second_tick = subprocess.run(command + ["run-due"], capture_output=True, text=True, check=False)
-            self.assertEqual(second_tick.returncode, 0)
-            self.assertIn("succeeded", second_tick.stdout)
+            queued_run = subprocess.run(command + ["run-queued", str(queued_id)], capture_output=True, text=True, check=False)
+            self.assertEqual(queued_run.returncode, 0)
+            self.assertIn("succeeded", queued_run.stdout)
             store = Store(data_dir / "scheduler.sqlite3")
             self.assertEqual([row["status"] for row in store.history("slow-job")], ["succeeded", "succeeded"])
             store.close()
@@ -253,3 +261,25 @@ class CronTests(unittest.TestCase):
             self.assertNotIn("secret error", serialized)
             self.assertNotIn("/private/log", serialized)
             store.close()
+
+    def test_dashboard_handler_uses_a_fresh_store_per_api_request(self):
+        with TemporaryDirectory() as temporary:
+            database = Path(temporary) / "scheduler.sqlite3"
+            store = Store(database)
+            store.initialize()
+            store.close()
+            server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(database))
+            server.daemon_threads = True
+            thread = Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            idle_client = socket.create_connection(server.server_address)
+            try:
+                url = f"http://127.0.0.1:{server.server_port}/api/overview"
+                with urlopen(url, timeout=1) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertIn('"jobs": []', response.read().decode())
+            finally:
+                idle_client.close()
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=1)
