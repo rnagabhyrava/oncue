@@ -95,6 +95,25 @@ output, errors, or credentials. It only binds to `127.0.0.1` (or `::1` with
 `--host ::1`), so do not expose it through a reverse proxy until the dashboard
 has authentication and a deliberate remote-access design.
 
+### Web UI
+
+The dashboard is a small, dependency-free local web UI for day-to-day job
+management:
+
+- View enabled, paused, queued, and failed-job summaries.
+- Filter jobs and recent runs in the browser.
+- Add jobs from registered projects and connection references.
+- Edit schedules, timezones, runners, models, sandbox settings, timeouts, and
+  enabled state.
+- Archive jobs from the UI without deleting their run history.
+
+![Codex Local Scheduler web UI](docs/dashboard.png)
+
+The page refreshes automatically every 15 seconds. Write actions are protected
+by the local loopback boundary and a per-process CSRF token. The UI does not
+display stored commands or Codex prompts; when editing, leave the replacement
+field blank to preserve the existing value.
+
 ## Current scope
 
 Codex Local Scheduler supports Linux systems with a user-level systemd manager and
