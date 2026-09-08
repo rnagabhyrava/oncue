@@ -87,11 +87,13 @@ worker already running continues to its normal terminal state.
 
 Run `codex-local-scheduler dashboard` and open
 [`http://127.0.0.1:8765/`](http://127.0.0.1:8765/) to see live job state and
-recent run metadata. It is a read-only, dependency-free view that refreshes
-every 15 seconds; it deliberately never exposes commands, Codex prompts, log
-paths, output, errors, or credentials. It only binds to `127.0.0.1` (or `::1`
-with `--host ::1`), so do not expose it through a reverse proxy until the
-dashboard has authentication and a deliberate remote-access design.
+recent run metadata. The dependency-free view refreshes every 15 seconds and
+allows adding, editing, pausing, resuming, and archiving jobs. Editing a job
+leaves its stored command or Codex prompt unchanged unless a replacement is
+entered. The dashboard deliberately never returns commands, prompts, log paths,
+output, errors, or credentials. It only binds to `127.0.0.1` (or `::1` with
+`--host ::1`), so do not expose it through a reverse proxy until the dashboard
+has authentication and a deliberate remote-access design.
 
 ## Current scope
 

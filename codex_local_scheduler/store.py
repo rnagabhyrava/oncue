@@ -172,6 +172,51 @@ class Store:
         )
         self.connection.commit()
 
+    def update_job(
+        self, slug: str, schedule: str, timeout: int, runner: str, model: str | None,
+        reasoning_effort: str | None, timezone: str, sandbox: str, auto_approve: bool,
+        connection: str | None, enabled: bool, command: str | None = None,
+    ) -> None:
+        """Update job configuration while preserving its slug and history."""
+        existing = self.job(slug, include_archived=True)
+        if not existing:
+            raise ValueError(f"unknown job: {slug}")
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
+        if runner not in ("command", "codex"):
+            raise ValueError("runner must be command or codex")
+        if runner == "codex" and not model:
+            raise ValueError("Codex jobs require a model")
+        if runner == "command" and sandbox != "read-only":
+            raise ValueError("sandbox selection applies only to Codex jobs")
+        if runner == "command" and auto_approve:
+            raise ValueError("automatic approval applies only to Codex jobs")
+        if auto_approve and sandbox != "workspace-write":
+            raise ValueError("automatic approval requires the workspace-write sandbox")
+        connection_id = None
+        if connection:
+            row = self.connection.execute("SELECT id FROM connections WHERE slug = ?", (connection,)).fetchone()
+            if not row:
+                raise ValueError(f"unknown connection: {connection}")
+            connection_id = row["id"]
+        fields = [
+            "schedule = ?", "timeout_seconds = ?", "runner = ?", "model = ?",
+            "reasoning_effort = ?", "timezone = ?", "sandbox = ?", "auto_approve = ?",
+            "connection_id = ?", "enabled = ?",
+        ]
+        values: list[object] = [schedule, timeout, runner, model, reasoning_effort, timezone,
+                                sandbox, int(auto_approve), connection_id, int(enabled)]
+        if command is not None:
+            if not command.strip():
+                raise ValueError("command cannot be empty")
+            fields.append("command = ?")
+            values.append(command)
+        values.append(slug)
+        self.connection.execute(f"UPDATE jobs SET {', '.join(fields)} WHERE slug = ?", values)
+        if not enabled:
+            self._skip_queued_runs(slug, "job paused before execution")
+        self.connection.commit()
+
     def jobs(self, include_archived: bool = False):
         archived_filter = "" if include_archived else "WHERE jobs.archived = 0"
         return self.connection.execute(
@@ -196,8 +241,11 @@ class Store:
         """Operational job data safe to present in the local read-only dashboard."""
         return self.connection.execute(
             """SELECT jobs.slug, projects.slug AS project_slug, jobs.schedule, jobs.enabled, jobs.archived,
-                      jobs.runner, jobs.model, jobs.timezone, runs.status AS last_status
+                      jobs.runner, jobs.model, jobs.reasoning_effort, jobs.timezone, jobs.sandbox, jobs.auto_approve,
+                      jobs.timeout_seconds, connections.slug AS connection_slug,
+                      runs.status AS last_status, runs.finished_at AS last_finished_at
                FROM jobs JOIN projects ON projects.id = jobs.project_id
+               LEFT JOIN connections ON connections.id = jobs.connection_id
                LEFT JOIN runs ON runs.id = (SELECT id FROM runs WHERE job_id = jobs.id ORDER BY id DESC LIMIT 1)
                ORDER BY jobs.archived, jobs.slug"""
         ).fetchall()
