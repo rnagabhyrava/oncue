@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 from .store import Store
@@ -61,14 +62,19 @@ def overview(store: Store) -> dict[str, Any]:
     }
 
 
-def _handler(store: Store):
+def _handler(database_path: Path):
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
             if self.path == "/":
                 body = HTML.encode()
                 content_type = "text/html; charset=utf-8"
             elif self.path == "/api/overview":
-                body = json.dumps(overview(store)).encode()
+                request_store = Store(database_path)
+                try:
+                    request_store.initialize()
+                    body = json.dumps(overview(request_store)).encode()
+                finally:
+                    request_store.close()
                 content_type = "application/json; charset=utf-8"
             else:
                 self.send_error(404, "Not found")
@@ -93,7 +99,10 @@ def serve(store: Store, host: str, port: int) -> None:
         raise ValueError("dashboard host must be a loopback address (127.0.0.1 or ::1)")
     if not 1 <= port <= 65535:
         raise ValueError("dashboard port must be between 1 and 65535")
-    server = HTTPServer((host, port), _handler(store))
+    # Browser previews can open an idle connection before sending a request.
+    # A threaded server keeps that client from blocking every other request.
+    server = ThreadingHTTPServer((host, port), _handler(store.path))
+    server.daemon_threads = True
     print(f"Dashboard available at http://{host}:{port}/ (Ctrl-C to stop)")
     try:
         server.serve_forever()
