@@ -1,0 +1,10 @@
+[Unit]
+Description=Check local workflow schedules every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+Persistent=true
+Unit=codex-local-scheduler.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.venv/
+.test-venv/
+build/
+dist/
+*.egg-info/
+.local-scheduler/
+.codex-local-scheduler/
+.env
+.env.*
+!.env.example
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.log
+*.pid
+
+# The demo fixture intentionally includes a small committed activity log.
+!examples/demo-project/data/
+!examples/demo-project/data/activity.log
