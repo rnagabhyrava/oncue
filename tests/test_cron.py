@@ -10,6 +10,7 @@ import time
 import unittest
 
 from codex_local_scheduler.cron import fields_for, matches
+from codex_local_scheduler.dashboard import overview
 from codex_local_scheduler.runner import invocation
 from codex_local_scheduler.runner import run_job, run_queued_job
 from codex_local_scheduler.store import Store
@@ -227,4 +228,28 @@ class CronTests(unittest.TestCase):
             self.assertEqual(store.history("legacy")[0]["status"], "succeeded")
             self.assertIsNotNone(store.queue_run(1, "2026-01-02T00:00:00+00:00"))
             self.assertEqual(store.queued_runs()[0]["id"], 2)
+            store.close()
+
+    def test_dashboard_exposes_operational_metadata_not_commands_or_errors(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project"
+            project.mkdir()
+            store = Store(root / "scheduler.sqlite3")
+            store.initialize()
+            store.add_project("demo", project)
+            store.add_job("private-job", "demo", "* * * * *", "secret-command --token abc", None, 10,
+                          "command", None, None, "America/Chicago", "read-only", False)
+            job_id = store.job("private-job")["id"]
+            run_id = store.start_run(job_id, "2026-01-01T00:00:00+00:00")
+            store.finish_run(run_id, "failed", 1, "/private/log", "secret error content")
+            data = overview(store)
+            serialized = str(data)
+            self.assertEqual(data["counts"]["Enabled jobs"], 1)
+            self.assertEqual(data["counts"]["Failed runs"], 1)
+            self.assertEqual(data["jobs"][0]["last_status"], "failed")
+            self.assertEqual(data["runs"][0]["job"], "private-job")
+            self.assertNotIn("secret-command", serialized)
+            self.assertNotIn("secret error", serialized)
+            self.assertNotIn("/private/log", serialized)
             store.close()

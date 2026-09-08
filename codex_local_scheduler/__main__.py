@@ -13,6 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .cron import matches
+from .dashboard import serve
 from .runner import run_job, run_queued_job, scheduler_lock
 from .store import Store
 
@@ -62,6 +63,9 @@ def parser() -> argparse.ArgumentParser:
     run_queued.add_argument("run_id", type=int)
     commands.add_parser("status")
     commands.add_parser("doctor")
+    dashboard = commands.add_parser("dashboard", help="Serve the read-only local dashboard")
+    dashboard.add_argument("--host", default="127.0.0.1", help="Loopback address (default: 127.0.0.1)")
+    dashboard.add_argument("--port", default=8765, type=int, help="Local port (default: 8765)")
     return root
 
 
@@ -184,6 +188,8 @@ def main() -> int:
                     print(f"- {problem}")
             else:
                 print("OK: data directory, registered projects, and job configuration are healthy.")
+        elif args.action == "dashboard":
+            serve(store, args.host, args.port)
         return 0
     except (ValueError, sqlite3.Error) as error:
         print(f"Error: {error}", file=sys.stderr)

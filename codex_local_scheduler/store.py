@@ -191,6 +191,26 @@ class Store:
                ORDER BY jobs.slug"""
         ).fetchall()
 
+    def dashboard_jobs(self):
+        """Operational job data safe to present in the local read-only dashboard."""
+        return self.connection.execute(
+            """SELECT jobs.slug, projects.slug AS project_slug, jobs.schedule, jobs.enabled, jobs.archived,
+                      jobs.runner, jobs.model, jobs.timezone, runs.status AS last_status
+               FROM jobs JOIN projects ON projects.id = jobs.project_id
+               LEFT JOIN runs ON runs.id = (SELECT id FROM runs WHERE job_id = jobs.id ORDER BY id DESC LIMIT 1)
+               ORDER BY jobs.archived, jobs.slug"""
+        ).fetchall()
+
+    def recent_runs(self, limit: int):
+        """Recent run metadata, deliberately excluding output paths and error contents."""
+        return self.connection.execute(
+            """SELECT jobs.slug AS job, runs.scheduled_for, runs.started_at, runs.finished_at,
+                      runs.status, runs.exit_code
+               FROM runs JOIN jobs ON jobs.id = runs.job_id
+               ORDER BY runs.id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+
     def job(self, slug: str, include_archived: bool = False):
         archived_filter = "" if include_archived else "AND jobs.archived = 0"
         return self.connection.execute(

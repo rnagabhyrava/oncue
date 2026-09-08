@@ -7,6 +7,7 @@
 - Added process-aware recovery, safer timeout cleanup, private scheduler data,
   and job archiving.
 - Added public-package metadata, release documentation, and CI scaffolding.
+- Added a loopback-only, read-only local dashboard for live scheduler state.
 
 ## 0.1.0
 
