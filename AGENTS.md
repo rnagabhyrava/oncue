@@ -54,6 +54,7 @@ security boundaries. Add narrowly scoped tests for changed scheduler behavior.
 
 ## Planned direction
 
-The next milestones are a real connection adapter and health check, then
-notifications, then a local dashboard. Keep the command-line and SQLite layer
-as the stable foundation for each of those features.
+The local dashboard now supports job creation, editing, enable/disable, and
+history-preserving archiving. The next milestones are a real connection adapter
+and health check, followed by notifications. Keep the command-line and SQLite
+layer as the stable foundation for each of those features.

@@ -150,5 +150,4 @@ of scheduling. A worker that finds its project busy returns the occurrence to
 the queue for a later tick. The next reliability milestone is explicit
 missed-run and retry policies: `Persistent=true` wakes the timer after downtime
 but does not replay every cron occurrence. Once that is in place, build a real
-connection adapter with a health check, then notifications and a local
-dashboard.
+connection adapter with a health check, then notifications.

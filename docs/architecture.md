@@ -20,7 +20,7 @@ codex-local-scheduler run-due
 
 codex-local-scheduler dashboard
     |
-    +--> loopback-only, read-only HTTP view of job and run metadata
+    +--> loopback-only HTTP view and job-management UI
 ```
 
 ## Boundaries
@@ -59,13 +59,18 @@ Codex jobs also record a model and reasoning effort. For example, use
 models or higher effort for complex review and planning jobs. The scheduler
 passes the recorded settings to `codex exec` at run time.
 
-The dashboard is deliberately separate from the execution path. It reads the
-same SQLite store in one local HTTP process and exposes operational metadata
-only: job identity, schedule, state, runner/model, and recent run timing and
-status. It excludes commands, prompts, connection data, logs, errors, and any
-write routes. Its server rejects non-loopback bind addresses. Job controls and
-remote access require explicit authentication, CSRF protection, and a separate
-security design before they are added.
+The dashboard is deliberately separate from the execution path. It reads and
+updates the same SQLite store in one local HTTP process. Its read surface exposes
+operational metadata such as job identity, schedule, state, runner/model, and
+recent run timing and status; it excludes commands, prompts, logs, errors, and
+credentials. Its write surface supports creating, editing, enabling/disabling,
+and archiving jobs while preserving run history. Commands and prompts are never
+returned to the browser; an edit only replaces one when a new value is supplied.
+
+The server rejects non-loopback bind addresses. Write requests also require a
+same-origin loopback host and a per-process CSRF token. This is suitable for
+local use only; remote access or reverse-proxy exposure still requires explicit
+authentication and a separate security design.
 
 ## First real workflow checklist
 
