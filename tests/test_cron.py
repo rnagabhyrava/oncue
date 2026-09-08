@@ -283,3 +283,21 @@ class CronTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=1)
+
+    def test_dashboard_job_update_preserves_secret_command_when_omitted(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project"
+            project.mkdir()
+            store = Store(root / "scheduler.sqlite3")
+            store.initialize()
+            store.add_project("demo", project)
+            store.add_job("daily", "demo", "* * * * *", "secret-command --token abc", None, 10,
+                          "command", None, None, "America/Chicago", "read-only", False)
+            store.update_job("daily", "0 9 * * *", 20, "command", None, None,
+                             "America/Chicago", "read-only", False, None, False)
+            row = store.job("daily", include_archived=True)
+            self.assertEqual(row["command"], "secret-command --token abc")
+            self.assertEqual(row["schedule"], "0 9 * * *")
+            self.assertFalse(row["enabled"])
+            store.close()
