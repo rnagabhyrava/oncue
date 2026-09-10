@@ -1,0 +1,272 @@
+"""Local task UI and same-origin API. Private content requires a session token."""
+import json
+import secrets
+import socket
+import sqlite3
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlsplit, parse_qs
+from typing import Any
+
+from .scheduler import LocalScheduler
+from .settings import get_settings, update_settings
+from .conversations import history, queue_message, retry_run
+from .providers import catalog
+from .auth import start_login, login_state
+from . import runtime
+from .schedules import from_form, next_run, once_at, to_form
+from .store import Store
+from .tasks import queue_manual, read_output, save_task
+
+STATIC = Path(__file__).parent / 'static'
+
+def overview(store: Store) -> dict[str, Any]:
+    """Return only operational metadata; never commands, prompts, logs, or errors."""
+    jobs = []
+    for row in store.dashboard_jobs():
+        state = "archived" if row["archived"] else ("enabled" if row["enabled"] else "paused")
+        jobs.append({
+            "slug": row["slug"], "title": row["title"] or row["slug"], "project": row["project_slug"], "schedule": row["schedule"],
+            "timezone": row["timezone"], "runner": row["runner"], "model": row["model"],
+            "reasoning_effort": row["reasoning_effort"], "sandbox": row["sandbox"], "auto_approve": bool(row["auto_approve"]),
+            "connection": row["connection_slug"], "timeout": row["timeout_seconds"],
+            "state": state, "last_status": row["last_status"], "last_finished_at": row["last_finished_at"],
+        })
+    runs = [dict(row) for row in store.recent_runs(30)]
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "counts": {
+            "Enabled jobs": sum(job["state"] == "enabled" for job in jobs),
+            "Paused jobs": sum(job["state"] == "paused" for job in jobs),
+            "Queued runs": store.connection.execute("SELECT COUNT(*) FROM runs WHERE status = 'queued'").fetchone()[0],
+            "Failed runs": store.connection.execute("SELECT COUNT(*) FROM runs WHERE status IN ('failed', 'timed_out')").fetchone()[0],
+        },
+        "jobs": jobs,
+        "runs": runs,
+    }
+
+
+def task_list(store):
+    result = overview(store)
+    for job in result['jobs']:
+        full=store.job(job['slug'],include_archived=True)
+        job['provider']=full['provider']
+        job['config']=json.loads(full['task_config'])
+        scheduled = once_at(job['schedule'])
+        occurrence = store.connection.execute(
+            'SELECT status FROM runs WHERE job_id=(SELECT id FROM jobs WHERE slug=?) AND scheduled_for=?',
+            (job['slug'], scheduled.isoformat() if scheduled else ''),
+        ).fetchone() if scheduled else None
+        if scheduled and occurrence and occurrence['status'] not in ('queued', 'running') and job['state'] != 'archived':
+            job['state'] = 'failed' if occurrence['status'] in ('failed','timed_out') else 'completed'
+        if full['completed_at'] and job['state']!='archived':job['state']='completed'
+        if job['config'].get('mode') in ('draft','chat') and job['state']!='archived':job['state']='draft'
+        job['next_run'] = next_run(job['schedule'], job['timezone']) if job['state'] == 'enabled' and not occurrence else None
+        job['timing'] = to_form(job['schedule'], job['timezone'])
+    heartbeat = store.connection.execute('SELECT last_tick FROM scheduler_state WHERE id=1').fetchone()
+    result['scheduler_active'] = bool(heartbeat and (datetime.now(timezone.utc) - datetime.fromisoformat(heartbeat['last_tick'])).total_seconds() < 90)
+    result['settings']=get_settings(store)
+    return result
+
+
+def _handler(database_path: Path):
+    csrf_token = secrets.token_urlsafe(32)
+
+    class Handler(BaseHTTPRequestHandler):
+        def setup(self):
+            super().setup()
+            self.connection.settimeout(15)
+
+        def _headers(self, status, content_type, body):
+            self.send_response(status)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('X-Frame-Options', 'DENY')
+            self.send_header('Referrer-Policy', 'no-referrer')
+            self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _json(self, status, payload):
+            self._headers(status, 'application/json; charset=utf-8', json.dumps(payload).encode())
+
+        def _host_allowed(self):
+            try:
+                host = urlsplit('//' + self.headers.get('Host', ''))
+                return host.hostname in ('127.0.0.1', 'localhost', '::1') and (host.port or 80) == self.server.server_port
+            except ValueError:
+                return False
+
+        def _write_allowed(self):
+            if not self._host_allowed():
+                return False
+            origin = self.headers.get('Origin')
+            if origin and origin != 'http://' + self.headers.get('Host', ''):
+                return False
+            return secrets.compare_digest(self.headers.get('X-CSRF-Token', ''), csrf_token)
+
+        def do_GET(self):
+            if not self._host_allowed():
+                self._json(403, {'error': 'Loopback host required'})
+                return
+            if self.path in ('/', '/app.js', '/app.css'):
+                name = {'/': 'index.html', '/app.js': 'app.js', '/app.css': 'app.css'}[self.path]
+                body = (STATIC / name).read_bytes().replace(b'__CSRF_TOKEN__', csrf_token.encode())
+                mime = {'/': 'text/html', '/app.js': 'text/javascript', '/app.css': 'text/css'}[self.path]
+                self._headers(200, mime + '; charset=utf-8', body)
+                return
+            if not self._write_allowed():
+                self._json(403, {'error': 'Session token required'})
+                return
+            store = Store(database_path)
+            try:
+                if self.path == '/api/overview':
+                    self._json(200, overview(store))
+                elif self.path == '/api/tasks':
+                    self._json(200, task_list(store))
+                elif self.path.startswith('/api/export/'):
+                    from .exports import archive
+                    import shutil
+                    with archive(store,self.path.split('/')[-1]) as source:
+                        self.send_response(200)
+                        self.send_header('Content-Type','application/zip')
+                        self.send_header('Cache-Control','no-store')
+                        self.end_headers()
+                        shutil.copyfileobj(source,self.wfile)
+                elif self.path.startswith('/api/conversation/'):
+                    url=urlsplit(self.path);slug=url.path.split('/')[-1]
+                    self._json(200,history(store,slug,parse_qs(url.query).get('before',[None])[0]))
+                elif self.path == '/api/settings':
+                    self._json(200,{'settings':get_settings(store),'providers':catalog(store.path.parent,get_settings(store)), 'login':login_state(store.path.parent),'runtimes':runtime.state()})
+                elif self.path.startswith('/api/tasks/'):
+                    slug = self.path.split('/')[-1]
+                    job = store.job(slug, include_archived=True)
+                    if not job:
+                        raise ValueError('Task not found')
+                    self._json(200, {'instructions': job['command'], 'history': [dict(r) for r in store.history(slug, 100)]})
+                elif self.path.startswith('/api/runs/'):
+                    parts = self.path.split('/')
+                    self._json(200, read_output(store, int(parts[3]), log=len(parts) == 5 and parts[4] == 'log'))
+                else:
+                    self._json(404, {'error': 'Not found'})
+            except (ValueError, KeyError) as error:
+                self._json(400, {'error': str(error)})
+            finally:
+                store.close()
+
+        def _read_json(self):
+            length = int(self.headers.get('Content-Length', '0'))
+            if not 0 <= length <= 65536:
+                raise ValueError('Request must be at most 64 KiB')
+            value = json.loads(self.rfile.read(length) or b'{}')
+            if not isinstance(value, dict):
+                raise ValueError('Expected a JSON object')
+            return value
+
+        def do_POST(self):
+            self._mutate()
+
+        def do_PATCH(self):
+            self._mutate()
+
+        def _mutate(self):
+            if not self._write_allowed():
+                self._json(403, {'error': 'Session token and same origin required'})
+                return
+            store = None
+            try:
+                data = self._read_json()
+                store = Store(database_path)
+                parts = self.path.split('/')
+                if self.path == '/api/settings':
+                    self._json(200,update_settings(store,data));return
+                if self.path == '/api/startup':
+                    from .service import install_startup
+                    self._json(200,{'launcher':install_startup(store.path.parent)});return
+                if self.path == '/api/providers/refresh':
+                    self._json(200,catalog(store.path.parent,get_settings(store),True));return
+                if self.path == '/api/providers/login':
+                    self._json(200,start_login(store.path.parent,get_settings(store)));return
+                if self.path == '/api/providers/install':
+                    self._json(202,runtime.install(store.path.parent,data.get('provider')));return
+                if self.path == '/api/message':
+                    self._json(202,queue_message(store,data.get('slug'),data.get('text'),data.get('options')));return
+                if len(parts)==5 and parts[1:3]==['api','runs'] and parts[4]=='retry':
+                    self._json(202,{'run_id':retry_run(store,int(parts[3]),data.get('minutes',0))});return
+                if len(parts)==5 and parts[1:3]==['api','runs'] and parts[4]=='cancel':
+                    with store.connection:
+                        store.connection.execute("UPDATE runs SET cancel_requested=1 WHERE id=?",(int(parts[3]),))
+                        store.connection.execute("UPDATE runs SET status='skipped',finished_at=CURRENT_TIMESTAMP,error='Cancelled by user' WHERE id=? AND status='queued'",(int(parts[3]),))
+                    self._json(200,{'ok':True});return
+                if self.path == '/api/preview'  and self.command == 'POST':
+                    schedule = from_form(data)
+                    self._json(200, {'next_run': next_run(schedule, data.get('timezone', 'UTC'))})
+                    return
+                if self.path == '/api/tasks' and self.command == 'POST':
+                    slug = save_task(store, data)
+                    self._json(201, {'slug': slug})
+                    return
+                if len(parts) == 4 and parts[1:3] == ['api', 'tasks'] and self.command == 'PATCH':
+                    self._json(200, {'slug': save_task(store, data, parts[3])})
+                    return
+                if len(parts) == 5 and parts[1:3] == ['api', 'tasks'] and self.command == 'POST':
+                    slug, action = parts[3:]
+                    if action == 'run':
+                        self._json(202, {'run_id': queue_manual(store, slug)})
+                        return
+                    if action not in ('pause', 'resume', 'archive'):
+                        raise ValueError('Unknown action')
+                    ok = store.archive_job(slug) if action == 'archive' else store.set_job_enabled(slug, action == 'resume')
+                    if not ok:
+                        raise ValueError('Task not found')
+                    self._json(200, {'ok': True})
+                    return
+                self._json(404, {'error': 'Not found'})
+            except (ValueError, KeyError, TypeError, sqlite3.IntegrityError) as error:
+                self._json(400, {'error': str(error)})
+            except Exception:
+                self._json(500, {'error': 'Could not complete request. Check the app terminal.'})
+                import logging
+                logging.exception('Task request failed')
+            finally:
+                if store:
+                    store.close()
+
+        def log_message(self, format, *args):
+            return
+
+    return Handler
+
+
+def serve(store, host, port):
+    if host not in ('127.0.0.1', '::1'):
+        raise ValueError('dashboard host must be a loopback address')
+    if not 1 <= port <= 65535:
+        raise ValueError('dashboard port must be between 1 and 65535')
+    class Server(ThreadingHTTPServer):
+        address_family = socket.AF_INET6 if host == '::1' else socket.AF_INET
+        daemon_threads = True
+    server = Server((host, port), _handler(store.path.resolve()))
+    scheduler = LocalScheduler(store.path)
+    scheduler.start()
+    import os
+    from .store import process_start_ticks
+    marker=store.path.parent/'service.json'
+    marker.write_text(json.dumps({'pid':os.getpid(),'start_ticks':process_start_ticks(os.getpid()),'url':f'http://{"[::1]" if host=="::1" else host}:{port}/'}))
+    os.chmod(marker,0o600)
+    print(f'Tasks available at http://{"[::1]" if host == "::1" else host}:{port}/ — scheduling is active', flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        scheduler.stop()
+        from .auth import close_sessions
+        close_sessions()
+        try:
+            if json.loads(marker.read_text())['pid']==os.getpid():marker.unlink()
+        except (OSError,ValueError,KeyError):pass

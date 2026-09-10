@@ -17,6 +17,5 @@ dist/
 *.log
 *.pid
 
-# The demo fixture intentionally includes a small committed activity log.
-!examples/demo-project/data/
-!examples/demo-project/data/activity.log
+.build-venv/
+node_modules/

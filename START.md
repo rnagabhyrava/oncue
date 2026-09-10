@@ -1,96 +1,133 @@
-# Start here
+# Set up OnCue
 
-This guide gets Codex Local Scheduler running from a fresh clone. It is also the
-entry point for agents making changes to this repository.
+OnCue runs scheduled AI tasks on your computer and keeps their results. You do not
+need to create a project, register a connection, or manage task folders.
 
-## Requirements
+## Run from this checkout
 
-- Linux with a user-level systemd manager for persistent schedules.
-- Python 3.11 or later with `pip`.
-- Codex on `PATH` only when using `--runner codex` jobs.
-
-The scheduler has no third-party runtime dependencies. Packaging uses
-setuptools only when installing or building a release.
-
-## Install from a clone
+Use Linux and Python 3.11 or newer:
 
 ```bash
-git clone https://github.com/rnagabhyrava/codex-local-scheduler.git
-cd codex-local-scheduler
-python3 -m pip install --user .
-codex-local-scheduler --help
+python3 -m oncue open
 ```
 
-Ensure `~/.local/bin` is on your shell `PATH`. The user-level systemd templates
-use this same installed command, so the clone may live anywhere.
-
-For development without installation, run commands as `python3 -m codex_local_scheduler`.
-For release tooling, install the optional development dependency with
-`python3 -m pip install --user '.[dev]'`.
-
-For an isolated installation instead, use a virtual environment:
+For an installed Python command:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install .
-.venv/bin/codex-local-scheduler --help
+.venv/bin/pip install .
+.venv/bin/oncue open
 ```
 
-When using this option with systemd, set `PATH` in the environment file below
-to include the absolute `.venv/bin` directory.
+`open` starts the app in the background and opens its UI. Closing the browser does
+not stop scheduling. `oncue stop` stops the app; `oncue start` starts it without
+opening a browser. `oncue dashboard --port 8766` runs in the foreground.
 
-## Prove the demo workflow
+## Use the bundled app
 
-Use a temporary data directory so the demo does not touch your normal jobs:
+The Linux x86_64 bundle includes Python, the React UI, Codex, and OpenCode. It needs
+no separate Python or Node installation and contains no accounts or credentials.
+
+Extract `oncue-linux-x86_64.tar.gz`, then run `./oncue/oncue open`. To install a
+launcher, command, and startup service, run `./oncue/install.sh`. The destination
+is `~/.local/share/oncue/bin`; the command is `~/.local/bin/oncue`.
+
+To build the bundle yourself, install Node 22.12+ / npm and Python 3.11+:
 
 ```bash
-demo_data=$(mktemp -d)
-codex-local-scheduler --data-dir "$demo_data" init
-codex-local-scheduler --data-dir "$demo_data" project add demo examples/demo-project
-codex-local-scheduler --data-dir "$demo_data" job add daily-status demo "* * * * *" --command "./scripts/daily-status.sh"
-codex-local-scheduler --data-dir "$demo_data" run-due
-codex-local-scheduler --data-dir "$demo_data" job history daily-status
+npm ci
+npm run build
+python3 -m venv .build-venv
+.build-venv/bin/pip install pyinstaller
+.build-venv/bin/python scripts/build_portable.py
 ```
 
-The job should succeed and create a report beneath the demo project. Inspect
-the log path printed by `job history` before scheduling real work.
+The archive appears in `dist/`. Build on the oldest Linux distribution you intend
+to support. This bundle requires glibc; macOS, Windows and musl builds are not
+currently provided.
 
-## Enable persistent schedules
+## Choose a provider
 
-After a real job has passed a manual run:
+First boot starts with **OpenCode → Big Pickle**, a no-login free model in the
+bundled catalog. Existing saved preferences are preserved. If that model becomes
+unavailable, choose another model marked Free.
 
-```bash
-loginctl enable-linger "$USER"
-mkdir -p ~/.config/systemd/user
-cp systemd/codex-local-scheduler.service systemd/codex-local-scheduler.timer systemd/codex-local-scheduler-worker@.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now codex-local-scheduler.timer
-systemctl --user list-timers codex-local-scheduler.timer
-```
+Open **Settings → Models**. Defaults apply to new tasks; existing tasks keep their
+own model. The dropdown shows discovered models and groups zero-cost OpenCode
+models under **Free models**. Refresh retrieves the provider's current catalog.
+**Enter a model ID…** is available for models not listed.
 
-The timer records due work once per minute. Individual worker services execute
-the queued runs. If Codex is installed outside `~/.local/bin`, create
-`~/.config/codex-local-scheduler/environment` from
-[`systemd/environment.example`](systemd/environment.example) with a `PATH=`
-that includes its directory.
+Click the model name below the message box to change only that conversation.
+Use **Run now** in a scheduled task’s header, or send exactly **“Run now”** in its
+chat, to queue the saved task immediately without changing its schedule. Finish
+scheduling a draft before running it.
 
-Use `systemctl --user status 'codex-local-scheduler-worker@*'` and
-`journalctl --user -u 'codex-local-scheduler-worker@*'` to inspect asynchronous
-job failures.
+### OpenCode
 
-## For agents and contributors
+Choose OpenCode and a model marked Free. The bundled runtime can use its available
+free models without an OpenCode login. Availability and provider data policies
+can change; [OpenCode’s documentation](https://opencode.ai/docs/zen/) describes
+its service. Other providers/models may require `opencode auth login` and billing.
+OnCue does not sign you up for a paid plan or add credits.
 
-Read [AGENTS.md](AGENTS.md) before changing code. The important constraints are
-preserving SQLite migrations, keeping `run-due` idempotent for each scheduled
-minute, and never storing credentials in the project, database, or logs.
+If the runtime is missing, use **Install runtime**. Source installations need npm
+for this step; the portable bundle already includes the native runtime.
 
-Run this before opening a pull request:
+### Codex / ChatGPT
 
-```bash
-python3 -m unittest discover -s tests -v
-python3 -m compileall -q codex_local_scheduler
-python3 -m build
-```
+Choose Codex and an account-eligible model. Two sign-in modes are available:
 
-Use [CONTRIBUTING.md](CONTRIBUTING.md) for the project workflow and
-[SECURITY.md](SECURITY.md) for vulnerability reporting.
+- **Use my local Codex login:** first sign in using `codex login` or a Codex app
+  that shares its local account storage. A ChatGPT website session alone is not
+  sufficient.
+- **Use a separate OnCue login:** click **Connect ChatGPT**, follow the provider’s
+  sign-in link, and save. Codex stores this login separately for OnCue.
+
+OnCue uses the supported Codex login flow. Passwords and tokens are not copied
+into its task database. Model availability and usage limits belong to the account.
+
+## Schedule and follow up
+
+Type what should happen and when. OnCue asks when important details are missing.
+Use the **+** button or **Task details** for explicit timing and execution controls.
+Each task gets a working folder automatically.
+
+The task sidebar opens its conversation. Ask follow-ups there, change the schedule,
+or use its menu to run, pause, resume, archive, and export. Earlier messages remain
+available. Export includes all messages and complete response/log files; on-screen
+output previews are limited to 256 KiB each.
+
+Recent conversation context is included in later runs. This is OnCue’s own history,
+not a mirrored ChatGPT chat. Replies appear after each run finishes; token streaming
+is not currently implemented.
+
+## Errors, retries and monitors
+
+Failures stay in history with an explanation and **Retry now** / **In N min**.
+Automatic retries use a bounded delay/count for planning, monitors, and tasks marked
+safe to repeat. Do not mark tasks safe when repetition could duplicate external
+actions. Sign-in, permission and invalid-model failures need attention.
+
+Fallback is optional. Enabling it permits sending task context to that provider
+on eligible retries. A different model may still share the same quota limit.
+
+A monitor needs a precise stop condition. “The IPO date is announced” differs from
+“the IPO happens.” It keeps observations, records unchanged checks quietly, and
+stops when the model reports completion with source evidence. This is AI-interpreted
+evidence, not independent verification. Monitors pause after their maximum check
+count (365 by default) if they have not completed.
+
+## Background operation and storage
+
+**Settings → General** offers startup at Linux sign-in and an optional sleep
+inhibitor. The computer must be powered on and connected; OnCue is not a cloud
+scheduler. Browser notifications need permission and an open tab.
+
+Schedules have minute precision. Missed recurring occurrences are skipped; one-time
+tasks and queued retries can run after restart. Busy workspaces or worker limits
+can delay execution. Repeated daylight-saving minutes may run twice; nonexistent
+recurring times are skipped. Invalid one-time local times are rejected.
+
+Back up the entire data directory, including SQLite and run files. See
+[compatibility and storage](docs/compatibility.md) for existing installations and
+custom locations. See [CLI/API/MCP](docs/api.md) for coding agents and automation.

@@ -1,4 +1,4 @@
 # Optional systemd environment overrides.
-# Copy to ~/.config/codex-local-scheduler/environment only if Codex is not found by
+# Copy to ~/.config/oncue/environment only if Codex is not found by
 # the default user service PATH, then replace the example path below.
 # PATH=/home/your-user/.local/bin:/usr/local/bin:/usr/bin:/bin:/path/to/codex

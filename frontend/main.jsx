@@ -1,0 +1,794 @@
+import { IconButton, ErrorNotice, Modal } from "./components";
+import ComposerModelPicker from "./ComposerModelPicker";
+import SettingsPanel from "./SettingsPanel";
+import TaskPanel from "./TaskPanel";
+import RunMessage from "./RunMessage";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import {
+  ArrowUp,
+  Plus,
+  Clock3,
+  Search,
+  Settings2,
+  ChevronDown,
+  ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
+  CalendarDays,
+  MoreHorizontal,
+  Play,
+  Pause,
+  Archive,
+  Download,
+  Check,
+  LoaderCircle,
+  MessageSquare,
+  Terminal,
+  SlidersHorizontal,
+  Eye,
+  Square,
+} from "lucide-react";
+import { request, exportHistory, formatDate, scheduleLabel } from "./api";
+import "./style.css";
+
+const empty = { jobs: [], runs: [], settings: {}, scheduler_active: false };
+const stateNames = {
+  enabled: "Scheduled",
+  paused: "Paused",
+  completed: "Completed",
+  archived: "Archived",
+  draft: "Conversation",
+  failed: "Needs attention",
+};
+const errorStates = ["failed", "timed_out"];
+function useTheme(theme) {
+  useEffect(() => {
+    const media = matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      document.documentElement.dataset.theme =
+        theme === "system" ? (media.matches ? "dark" : "light") : theme;
+      localStorage.setItem("oncue-theme", theme);
+    };
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [theme]);
+}
+
+function App() {
+  const [data, setData] = useState(empty),
+    [selected, setSelected] = useState(null),
+    [query, setQuery] = useState(""),
+    [archived, setArchived] = useState(false),
+    [sidebar, setSidebar] = useState(false),
+    [collapsed, setCollapsed] = useState(false),
+    [settingsOpen, setSettingsOpen] = useState(false),
+    [draftModel, setDraftModel] = useState(null),
+    [editor, setEditor] = useState(false),
+    [messages, setMessages] = useState([]),
+    [active, setActive] = useState([]),
+    [before, setBefore] = useState(null),
+    [text, setText] = useState(""),
+    [sending, setSending] = useState(false),
+    [error, setError] = useState(""),
+    [connected, setConnected] = useState(true),
+    [log, setLog] = useState(null),
+    [menu, setMenu] = useState(false),
+    [loading, setLoading] = useState(false),
+    [olderBusy, setOlderBusy] = useState(false);
+  const selectedRef = useRef(selected),
+    knownRuns = useRef(null),
+    lastData = useRef(""),
+    loadedRef = useRef(null),
+    scroller = useRef(null),
+    nearBottom = useRef(true),
+    input = useRef(null);
+  selectedRef.current = selected;
+  const task = data.jobs.find((j) => j.slug === selected),
+    prefs = data.settings;
+  const currentModel = task
+    ? { provider: task.provider, model: task.model }
+    : draftModel || { provider: prefs.provider || "codex", model: prefs.model };
+  useTheme(prefs.theme || localStorage.getItem("oncue-theme") || "system");
+  const refresh = useCallback(async () => {
+    try {
+      const result = await request("/api/tasks");
+      delete result.generated_at;
+      const signature = JSON.stringify(result);
+      if (signature !== lastData.current) {
+        lastData.current = signature;
+        setData(result);
+      }
+      setConnected(true);
+      const terminal = result.runs.filter((r) =>
+        ["succeeded", "failed", "timed_out"].includes(r.status),
+      );
+      if (
+        knownRuns.current &&
+        result.settings.notifications &&
+        "Notification" in window &&
+        Notification.permission === "granted"
+      )
+        for (const run of terminal)
+          if (!knownRuns.current.has(run.id) && run.notify !== 0)
+            new Notification("OnCue", { body: `${run.job}: ${run.status}` });
+      knownRuns.current = new Set(terminal.map((r) => r.id));
+      const slug = selectedRef.current;
+      if (slug) {
+        const conversation = await request("/api/conversation/" + slug);
+        if (selectedRef.current !== slug) return;
+        setMessages((old) => {
+          const merged = new Map(
+            [...old, ...conversation.messages].map((m) => [m.id, m]),
+          );
+          return [...merged.values()].sort((a, b) => a.id - b.id);
+        });
+        setActive(conversation.active_runs);
+        if (loadedRef.current !== slug) {
+          setBefore(conversation.before);
+          loadedRef.current = slug;
+        }
+        setLoading(false);
+      }
+    } catch (e) {
+      setConnected(false);
+      setError(e.message);
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    refresh();
+    let running = false;
+    const timer = setInterval(async () => {
+      if (running || document.hidden) return;
+      running = true;
+      try {
+        await refresh();
+      } finally {
+        running = false;
+      }
+    }, 2000);
+    const visible = () => {
+      if (!document.hidden) refresh();
+    };
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, [refresh]);
+  useEffect(() => {
+    if (nearBottom.current && scroller.current)
+      scroller.current.scrollTo({
+        top: scroller.current.scrollHeight,
+        behavior: "smooth",
+      });
+  }, [messages.length, active.length, sending]);
+  function select(slug) {
+    selectedRef.current = slug;
+    setSelected(slug);
+    setDraftModel(null);
+    setMessages([]);
+    setActive([]);
+    setBefore(null);
+    loadedRef.current = null;
+    setError("");
+    setMenu(false);
+    setSidebar(false);
+    nearBottom.current = true;
+    setLoading(!!slug);
+    setText("");
+    if (slug) refresh();
+    else input.current?.focus();
+  }
+  async function action(fn) {
+    setError("");
+    try {
+      await fn();
+      await refresh();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+  async function send(e) {
+    e.preventDefault();
+    if (!text.trim() || sending) return;
+    if (!currentModel.model) {
+      setError("Choose a model below the message box to get started.");
+      return;
+    }
+    const value = text;
+    setSending(true);
+    setError("");
+    nearBottom.current = true;
+    try {
+      const result = await request("/api/message", "POST", {
+        slug: selected,
+        text: value,
+        options: selected ? undefined : draftModel || undefined,
+      });
+      setText("");
+      if (result.slug !== selected) {
+        selectedRef.current = result.slug;
+        setSelected(result.slug);
+        loadedRef.current = null;
+        setMessages([]);
+      }
+      await refresh();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSending(false);
+    }
+  }
+  async function earlier() {
+    if (!before) return;
+    const slug = selected;
+    setOlderBusy(true);
+    nearBottom.current = false;
+    const el = scroller.current,
+      height = el?.scrollHeight;
+    try {
+      const result = await request(
+        `/api/conversation/${selected}?before=${before}`,
+      );
+      if (selectedRef.current !== slug) return;
+      setMessages((old) => [...result.messages, ...old]);
+      setBefore(result.before);
+      requestAnimationFrame(() => {
+        if (el) el.scrollTop += el.scrollHeight - height;
+      });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setOlderBusy(false);
+    }
+  }
+  const closeSettings = useCallback(() => setSettingsOpen(false), []),
+    closeEditor = useCallback(() => setEditor(false), []),
+    closeLog = useCallback(() => setLog(null), []);
+  const filtered = data.jobs.filter(
+    (j) =>
+      (archived ? j.state === "archived" : j.state !== "archived") &&
+      j.title.toLowerCase().includes(query.toLowerCase()),
+  );
+  const disabled =
+    sending ||
+    active.some((r) => r.kind === "plan") ||
+    task?.state === "archived" ||
+    task?.runner === "command";
+  const composer = (
+    <form className={`composer ${sending ? "submitting" : ""}`} onSubmit={send}>
+      <textarea
+        ref={input}
+        aria-label="Message"
+        placeholder={
+          task
+            ? "Ask a follow-up or change the schedule…"
+            : "What should I do, and when?"
+        }
+        value={text}
+        disabled={task?.state === "archived" || task?.runner === "command"}
+        rows={text.split("\n").length > 2 ? 4 : 2}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            if (!disabled) send(e);
+          }
+        }}
+      />
+      <div className="composer-tools">
+        <IconButton
+          label="Task settings"
+          onClick={() => setEditor(true)}
+          type="button"
+        >
+          <Plus size={18} />
+        </IconButton>
+        <ComposerModelPicker
+          key={selected || "new"}
+          {...currentModel}
+          disabled={disabled}
+          onChange={async (choice) => {
+            if (task) {
+              await request("/api/tasks/" + task.slug, "PATCH", {
+                ...choice,
+                effort: "",
+              });
+              await refresh();
+            } else setDraftModel(choice);
+          }}
+        />
+        <span className="compose-spacer" />
+        <button
+          className="send-button"
+          type="submit"
+          disabled={disabled || !text.trim()}
+          aria-label="Send message"
+        >
+          {sending ? (
+            <LoaderCircle className="spin" size={18} />
+          ) : (
+            <ArrowUp size={19} />
+          )}
+        </button>
+      </div>
+    </form>
+  );
+  return (
+    <div className={`app ${collapsed ? "sidebar-collapsed" : ""}`}>
+      <div
+        className={`sidebar-backdrop ${sidebar ? "visible" : ""}`}
+        onClick={() => setSidebar(false)}
+      />
+      <aside className={sidebar ? "open" : ""}>
+        <div className="brand-row">
+          <button className="brand" onClick={() => select(null)}>
+            <span className="brand-mark">
+              <Clock3 size={21} />
+            </span>
+            OnCue
+          </button>
+          <IconButton
+            label="Collapse sidebar"
+            onClick={() => {
+              setCollapsed(true);
+              setSidebar(false);
+            }}
+          >
+            <PanelLeftClose size={17} />
+          </IconButton>
+        </div>
+        <button className="new-task" onClick={() => select(null)}>
+          <Plus size={17} />
+          New task<span>↵</span>
+        </button>
+        <label className="search">
+          <Search size={14} />
+          <input
+            aria-label="Search tasks"
+            placeholder="Search tasks"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </label>
+        <div className="list-heading">
+          <span>{archived ? "Archived" : "Your tasks"}</span>
+          <button
+            className={archived ? "active-filter" : ""}
+            aria-label={archived ? "Show current tasks" : "Show archived tasks"}
+            title={archived ? "Show current tasks" : "Show archived tasks"}
+            onClick={() => setArchived(!archived)}
+          >
+            <Archive size={13} />
+          </button>
+        </div>
+        <nav aria-label="Task conversations">
+          {filtered.map((j) => (
+            <button
+              key={j.slug}
+              className={`task-link ${selected === j.slug ? "selected" : ""}`}
+              onClick={() => select(j.slug)}
+            >
+              {j.config.mode === "monitor" ? (
+                <Eye size={15} />
+              ) : j.state === "draft" ? (
+                <MessageSquare size={15} />
+              ) : (
+                <Clock3 size={15} />
+              )}
+              <span>
+                <strong>{j.title}</strong>
+                <small>
+                  {errorStates.includes(j.last_status)
+                    ? "Needs attention"
+                    : stateNames[j.state]}
+                </small>
+              </span>
+              <span
+                className={`task-dot ${errorStates.includes(j.last_status) ? "error" : j.state}`}
+              />
+            </button>
+          ))}
+          {filtered.length === 0 && (
+            <p className="nav-empty">
+              {query
+                ? "No matching tasks"
+                : archived
+                  ? "Nothing archived"
+                  : "Your tasks will appear here"}
+            </p>
+          )}
+        </nav>
+        <div className="sidebar-bottom">
+          <button onClick={() => setSettingsOpen(true)}>
+            <Settings2 size={16} />
+            Settings
+          </button>
+          <div className="service-status">
+            <span
+              className={`status-dot ${connected && data.scheduler_active ? "ready" : ""}`}
+            />
+            {connected
+              ? data.scheduler_active
+                ? "Running on this computer"
+                : "Scheduler is offline"
+              : "Reconnecting…"}
+          </div>
+        </div>
+      </aside>
+      <main>
+        <header className="topbar">
+          <IconButton
+            label="Open sidebar"
+            className="icon-button show-sidebar"
+            onClick={() => {
+              setCollapsed(false);
+              setSidebar(true);
+            }}
+          >
+            <PanelLeftOpen size={18} />
+          </IconButton>
+          <div className="breadcrumb">
+            {task ? (
+              <>
+                <span>Tasks</span>
+                <ChevronRight size={13} />
+                <strong>{task.title}</strong>
+              </>
+            ) : (
+              <span>New task</span>
+            )}
+          </div>
+          <div className="top-actions">
+            {task && (
+              <>
+                {task.state !== "draft" && task.state !== "archived" && (
+                  <button
+                    className="quiet run-now-button"
+                    disabled={sending || active.length > 0}
+                    onClick={() =>
+                      action(() =>
+                        request(`/api/tasks/${task.slug}/run`, "POST", {}),
+                      )
+                    }
+                  >
+                    <Play size={14} /> Run now
+                  </button>
+                )}
+                <button
+                  className="quiet task-details-button"
+                  aria-label="Task details"
+                  onClick={() => setEditor(true)}
+                >
+                  <SlidersHorizontal size={14} />
+                  <span>Task details</span>
+                </button>
+                <div className="menu-anchor">
+                  <IconButton
+                    label="More task actions"
+                    onClick={() => setMenu(!menu)}
+                  >
+                    <MoreHorizontal size={20} />
+                  </IconButton>
+                  {menu && (
+                    <>
+                      <button
+                        className="menu-dismiss"
+                        aria-label="Close task menu"
+                        onClick={() => setMenu(false)}
+                      />
+                      <div className="action-menu">
+                        {task.state !== "archived" && (
+                          <>
+                            <button
+                              onClick={() => {
+                                setMenu(false);
+                                action(() =>
+                                  request(
+                                    `/api/tasks/${task.slug}/${task.state === "paused" ? "resume" : "pause"}`,
+                                    "POST",
+                                    {},
+                                  ),
+                                );
+                              }}
+                            >
+                              {task.state === "paused" ? (
+                                <Play size={14} />
+                              ) : (
+                                <Pause size={14} />
+                              )}{" "}
+                              {task.state === "paused" ? "Resume" : "Pause"}
+                            </button>
+                          </>
+                        )}
+                        <button
+                          onClick={() => {
+                            setMenu(false);
+                            action(() => exportHistory(task.slug));
+                          }}
+                        >
+                          <Download size={14} />
+                          Export history
+                        </button>
+                        {task.state !== "archived" && (
+                          <button
+                            onClick={() => {
+                              setMenu(false);
+                              action(() =>
+                                request(
+                                  `/api/tasks/${task.slug}/archive`,
+                                  "POST",
+                                  {},
+                                ),
+                              );
+                            }}
+                          >
+                            <Archive size={14} />
+                            Archive task
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </header>
+        {!selected ? (
+          <div className="landing">
+            <div className="welcome">
+              <span className="welcome-mark">
+                <Clock3 size={29} />
+              </span>
+              <h1>A little less on your plate.</h1>
+              <p>Tell me what to do and when. I’ll take it from there.</p>
+            </div>
+            <div className="landing-composer">
+              {composer}
+              <ErrorNotice onClose={() => setError("")}>{error}</ErrorNotice>
+              <div className="suggestions">
+                {[
+                  [
+                    "daily",
+                    Clock3,
+                    "A daily briefing",
+                    "Every weekday at 8 AM, give me a short briefing on the latest AI news, with sources.",
+                  ],
+                  [
+                    "monitor",
+                    Eye,
+                    "Keep an eye on something",
+                    "Check every Monday at 9 AM whether an official release date has been announced for ",
+                  ],
+                  [
+                    "once",
+                    CalendarDays,
+                    "A one-time task",
+                    "Tomorrow at 9 AM, give me ",
+                  ],
+                ].map(([id, Icon, title, prompt]) => (
+                  <button
+                    key={id}
+                    onClick={() => {
+                      setText(prompt);
+                      input.current?.focus();
+                    }}
+                  >
+                    <Icon size={15} />
+                    {title}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="landing-footnote">
+              <span className="status-dot ready" />
+              Runs locally. Your computer needs to be awake and connected.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div
+              className="conversation-scroll"
+              ref={scroller}
+              onScroll={(e) => {
+                const el = e.currentTarget;
+                nearBottom.current =
+                  el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+              }}
+            >
+              <div className="conversation-content">
+                <div className="conversation-heading">
+                  <h1>{task?.title || "Your task"}</h1>
+                  {task && task.state !== "draft" && (
+                    <button
+                      className="schedule-pill"
+                      onClick={() => setEditor(true)}
+                    >
+                      <CalendarDays size={13} />
+                      {scheduleLabel(task)}
+                      <span className="pill-divider" />
+                      {stateNames[task.state]}
+                      <ChevronDown size={12} />
+                    </button>
+                  )}
+                  {task?.next_run && (
+                    <p className="next-run">
+                      Next run {formatDate(task.next_run)} · {task.timezone}
+                    </p>
+                  )}
+                  {task?.config.condition && (
+                    <p className="stop-condition">
+                      <Eye size={13} />
+                      Stop when {task.config.condition}
+                    </p>
+                  )}
+                </div>
+                {before && (
+                  <button
+                    className="load-older"
+                    disabled={olderBusy}
+                    onClick={earlier}
+                  >
+                    {olderBusy ? (
+                      <LoaderCircle size={13} className="spin" />
+                    ) : (
+                      <Clock3 size={13} />
+                    )}
+                    Earlier messages
+                  </button>
+                )}
+                {loading && (
+                  <div className="loading-history">
+                    <LoaderCircle size={18} className="spin" />
+                    Loading conversation
+                  </div>
+                )}
+                {!loading && messages.length === 0 && (
+                  <div className="empty-conversation">
+                    <MessageSquare size={25} />
+                    <p>This is where your task’s story unfolds.</p>
+                    <small>Every response and update will stay here.</small>
+                  </div>
+                )}
+                {messages.map((m) => (
+                  <RunMessage
+                    key={m.id}
+                    message={m}
+                    retryMinutes={prefs.retry_minutes || 30}
+                    onRetry={(id, minutes) =>
+                      action(() =>
+                        request(`/api/runs/${id}/retry`, "POST", { minutes }),
+                      )
+                    }
+                    onLog={(id) =>
+                      action(async () =>
+                        setLog(await request(`/api/runs/${id}/log`)),
+                      )
+                    }
+                  />
+                ))}
+                {active.map((run) => (
+                  <div className="active-run" key={run.id}>
+                    {run.status === "running" ? (
+                      <LoaderCircle className="spin" size={16} />
+                    ) : (
+                      <Clock3 size={16} />
+                    )}
+                    <div>
+                      <strong>
+                        {run.retry_at
+                          ? `Retry ${formatDate(run.retry_at)}`
+                          : run.status === "running"
+                            ? run.kind === "plan"
+                              ? "Thinking it through…"
+                              : "Working on your task…"
+                            : "Ready to run"}
+                      </strong>
+                      <small>
+                        {run.retry_at
+                          ? "The failed attempt stays in your history."
+                          : run.status === "running"
+                            ? "You can leave this open or come back later."
+                            : "Waiting for an available worker."}
+                      </small>
+                    </div>
+                    <IconButton
+                      label="Cancel run"
+                      onClick={() =>
+                        action(() =>
+                          request(`/api/runs/${run.id}/cancel`, "POST", {}),
+                        )
+                      }
+                    >
+                      <Square size={13} />
+                    </IconButton>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="conversation-bottom">
+              <ErrorNotice onClose={() => setError("")}>{error}</ErrorNotice>
+              {task?.state === "archived" ? (
+                <div className="archived-notice">
+                  <Archive size={15} />
+                  Archived. Your conversation and responses are preserved.
+                </div>
+              ) : task?.runner === "command" ? (
+                <button className="quiet" onClick={() => setEditor(true)}>
+                  <Terminal size={15} />
+                  Edit shell task
+                </button>
+              ) : (
+                composer
+              )}
+              <div className="composer-caption">
+                {active.some((r) => r.kind === "plan")
+                  ? "Your message is being processed."
+                  : "Shift + Enter for a new line"}
+                <span>Responses stay in this conversation.</span>
+              </div>
+            </div>
+          </>
+        )}
+      </main>
+      {settingsOpen && (
+        <SettingsPanel
+          initial={prefs}
+          onClose={closeSettings}
+          onSaved={refresh}
+        />
+      )}{" "}
+      {editor && (
+        <TaskPanel
+          task={task}
+          settings={{ ...prefs, ...draftModel }}
+          initialText={text}
+          onClose={closeEditor}
+          onSaved={(slug) => {
+            select(slug);
+            refresh();
+          }}
+        />
+      )}
+      {log && (
+        <Modal title="Execution log" onClose={closeLog} wide>
+          <div className="log-body">
+            <p className="hint">
+              {log.truncated
+                ? "Preview limited to 256 KiB. Export history for the complete log."
+                : log.status}
+            </p>
+            <pre>{log.text || "No output yet."}</pre>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+class ErrorBoundary extends React.Component {
+  state = { error: null };
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  render() {
+    return this.state.error ? (
+      <div className="fatal-error">
+        <h1>Let’s get you back on track.</h1>
+        <p>The interface couldn’t load. Your tasks and history remain saved.</p>
+        <button onClick={() => location.reload()}>Reload OnCue</button>
+      </div>
+    ) : (
+      this.props.children
+    );
+  }
+}
+createRoot(document.getElementById("root")).render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>,
+);

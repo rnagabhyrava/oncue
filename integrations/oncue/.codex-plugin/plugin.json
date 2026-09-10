@@ -1,0 +1,17 @@
+{
+  "name": "oncue",
+  "version": "0.3.0",
+  "description": "Schedule local AI tasks and monitors, then read every saved response.",
+  "author": {"name": "OnCue contributors"},
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "OnCue",
+    "shortDescription": "Schedule tasks and keep their results",
+    "longDescription": "Create, update, pause and inspect OnCue tasks from your coding agent. Requires the local OnCue app.",
+    "developerName": "OnCue contributors",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Schedule a task with OnCue."
+  }
+}

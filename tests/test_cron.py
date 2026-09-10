@@ -13,11 +13,12 @@ from threading import Thread
 import unittest
 from urllib.request import urlopen
 
-from codex_local_scheduler.cron import fields_for, matches
-from codex_local_scheduler.dashboard import _handler, overview
-from codex_local_scheduler.runner import invocation
-from codex_local_scheduler.runner import run_job, run_queued_job
-from codex_local_scheduler.store import Store
+from oncue.cron import fields_for, matches
+from oncue.dashboard import _handler, overview
+from oncue.providers import command as provider_command
+from unittest.mock import patch
+from oncue.runner import run_job, run_queued_job
+from oncue.store import Store
 
 
 class CronTests(unittest.TestCase):
@@ -29,11 +30,8 @@ class CronTests(unittest.TestCase):
         self.assertFalse(matches("0 16 * * 0", monday_at_four))
 
     def test_builds_a_model_specific_codex_invocation(self):
-        command, uses_shell = invocation({
-            "runner": "codex", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
-            "command": "Write the weekly report.", "sandbox": "workspace-write", "auto_approve": 1,
-        })
-        self.assertFalse(uses_shell)
+        with patch('oncue.providers.executable',return_value='codex'):
+            command = provider_command('codex','gpt-5.6-terra','Write the weekly report.',Path('/tmp/response'),sandbox='workspace-write',effort='medium',auto=True)
         self.assertEqual(command[0:4], ["codex", "exec", "--model", "gpt-5.6-terra"])
         self.assertIn("workspace-write", command)
         self.assertIn("--approve-for-me", command)
@@ -181,7 +179,7 @@ class CronTests(unittest.TestCase):
             store.add_job("slow-job", "demo", "* * * * *", "sleep 2", None, 10, "command", None,
                           None, "America/Chicago", "read-only", False)
             store.close()
-            command = [sys.executable, "-m", "codex_local_scheduler", "--data-dir", str(data_dir)]
+            command = [sys.executable, "-m", "oncue", "--data-dir", str(data_dir)]
             manual = subprocess.Popen(command + ["job", "run", "slow-job"], stdout=subprocess.PIPE, text=True)
             for _ in range(100):
                 store = Store(data_dir / "scheduler.sqlite3")
@@ -275,7 +273,10 @@ class CronTests(unittest.TestCase):
             idle_client = socket.create_connection(server.server_address)
             try:
                 url = f"http://127.0.0.1:{server.server_port}/api/overview"
-                with urlopen(url, timeout=1) as response:
+                with urlopen(f"http://127.0.0.1:{server.server_port}/", timeout=1) as response:
+                    html = response.read().decode()
+                token = __import__("re").search(r'name="csrf-token" content="([^"]+)"', html).group(1)
+                with urlopen(__import__("urllib.request", fromlist=["Request"]).Request(url, headers={"X-CSRF-Token": token}), timeout=1) as response:
                     self.assertEqual(response.status, 200)
                     self.assertIn('"jobs": []', response.read().decode())
             finally:

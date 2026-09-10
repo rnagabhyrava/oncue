@@ -1,0 +1,10 @@
+[Unit]
+Description=Run queued local workflow job %i
+
+[Service]
+Type=oneshot
+Environment=ONCUE_DATA=%h/.local/share/oncue/data
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/oncue/environment
+UMask=0077
+ExecStart=/usr/bin/env oncue run-queued %i
