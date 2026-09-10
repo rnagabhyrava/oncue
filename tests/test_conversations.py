@@ -1,4 +1,5 @@
 """Exercise durable planning, monitoring, retries, history and the MCP bridge."""
+import base64
 import json
 import sys
 import unittest
@@ -127,7 +128,42 @@ class ConversationTests(unittest.TestCase):
         self.assertFalse(response['result']['isError'])
         new=json.loads(response['result']['content'][0]['text'])['slug']
         self.assertEqual(self.store.job(new)['model'],'changed')
-        self.assertEqual(len(handle(self.store,{'id':2,'method':'tools/list'})['result']['tools']),8)
+        self.assertEqual(len(handle(self.store,{'id':2,'method':'tools/list'})['result']['tools']),19)
+
+    def test_mcp_covers_projects_references_followups_and_safe_deletion(self):
+        def invoke(name,args):
+            response=handle(self.store,{'id':1,'method':'tools/call','params':{'name':name,'arguments':args}})['result']
+            return response,json.loads(response['content'][0]['text']) if not response['isError'] else None
+        with patch('oncue.service.start'):
+            response,project=invoke('create_project',{'name':'Research','instructions':'Prefer primary sources','icon':'🔎','color':'#4f94ed'})
+            self.assertFalse(response['isError']);project_id=project['project_id']
+            response,created=invoke('create_task',{'instructions':'Check the launch','frequency':'daily','time':'09:00','mode':'monitor',
+                                                   'condition':'An official date is announced','max_checks':12,'task_project_id':project_id})
+            self.assertFalse(response['isError']);slug=created['slug']
+            self.assertEqual(json.loads(self.store.job(slug)['task_config'])['max_checks'],12)
+            self.assertEqual(self.store.job(slug)['task_project_id'],project_id)
+            self.assertFalse(invoke('update_task',{'slug':slug,'changes':{'task_project_id':None}})[0]['isError'])
+            self.assertIsNone(self.store.job(slug)['task_project_id'])
+            self.assertFalse(invoke('update_task',{'slug':slug,'changes':{'task_project_id':project_id}})[0]['isError'])
+
+            encoded=base64.b64encode(b'# Brief\nUse the official announcement.').decode()
+            response,uploaded=invoke('upload_attachment',{'owner_type':'project','owner':project_id,'name':'brief.md','content':encoded})
+            self.assertFalse(response['isError']);attachment_id=uploaded['attachment_id']
+            self.assertEqual(invoke('list_attachments',{'owner_type':'project','owner':project_id})[1][0]['name'],'brief.md')
+            self.assertIn('official announcement',invoke('read_attachment',{'attachment_id':attachment_id})[1]['text'])
+            self.assertFalse(invoke('delete_attachment',{'attachment_id':attachment_id})[0]['isError'])
+
+            response,followup=invoke('send_message',{'slug':slug,'text':'Move this to 10 AM'})
+            self.assertFalse(response['isError'])
+            self.assertFalse(invoke('cancel_run',{'run_id':followup['run_id']})[0]['isError'])
+            self.assertEqual(self.store.connection.execute('SELECT status FROM runs WHERE id=?',(followup['run_id'],)).fetchone()['status'],'skipped')
+
+            self.assertTrue(invoke('delete_project',{'project_id':project_id,'confirm_permanent':False})[0]['isError'])
+            self.assertFalse(invoke('delete_project',{'project_id':project_id,'confirm_permanent':True})[0]['isError'])
+            self.assertIsNone(self.store.job(slug)['task_project_id'])
+            self.assertTrue(invoke('delete_task',{'slug':slug,'confirm_permanent':False})[0]['isError'])
+            self.assertFalse(invoke('delete_task',{'slug':slug,'confirm_permanent':True})[0]['isError'])
+            self.assertIsNone(self.store.job(slug,include_archived=True))
 
     def test_cancel_running_provider_preserves_attempt(self):
         import threading,time

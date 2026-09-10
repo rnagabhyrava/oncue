@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Expanded the local MCP bridge with monitor limits, project assignment and CRUD,
+  reference attachments, conversation follow-ups, run cancellation, and
+  confirmation-gated permanent deletion.
 - Added required Auth0 Google sign-in when an account service is configured.
 - Added explicit installation claiming, revocable computer credentials, outbound
   cloud synchronization, offline history, and deduplicated remote controls.
