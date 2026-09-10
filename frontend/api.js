@@ -1,11 +1,17 @@
 const token = document.querySelector('meta[name="csrf-token"]').content;
+let accessToken = async () => null;
+export function setAccessTokenProvider(provider) {
+  accessToken = provider || (async () => null);
+}
 export async function request(path, method = "GET", body, signal) {
+  const bearer = await accessToken();
   const response = await fetch(path, {
     method,
     signal,
     cache: "no-store",
     headers: {
       "X-CSRF-Token": token,
+      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
     },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -16,8 +22,9 @@ export async function request(path, method = "GET", body, signal) {
   return data;
 }
 export async function exportHistory(slug) {
+  const bearer = await accessToken();
   const response = await fetch("/api/export/" + slug, {
-    headers: { "X-CSRF-Token": token },
+    headers: { "X-CSRF-Token": token, ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
   });
   if (!response.ok)
     throw new Error("Could not export history. Please try again.");

@@ -6,6 +6,7 @@ import ProjectPanel from "./ProjectPanel";
 import RunMessage from "./RunMessage";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { Auth0Provider, useAuth0 } from "@auth0/auth0-react";
 import {
   ArrowUp,
   Plus,
@@ -32,11 +33,28 @@ import {
   Folder,
   X,
   Trash2,
+  SquarePen,
+  Sparkles,
+  Paperclip,
+  ArrowRight,
+  Laptop,
 } from "lucide-react";
-import { request, exportHistory, formatDate, scheduleLabel } from "./api";
+import {
+  request,
+  exportHistory,
+  formatDate,
+  scheduleLabel,
+  setAccessTokenProvider,
+} from "./api";
 import "./style.css";
 
-const empty = { jobs: [], runs: [], projects: [], settings: {}, scheduler_active: false };
+const empty = {
+  jobs: [],
+  runs: [],
+  projects: [],
+  settings: {},
+  scheduler_active: false,
+};
 const stateNames = {
   enabled: "Scheduled",
   paused: "Paused",
@@ -60,10 +78,11 @@ function useTheme(theme) {
   }, [theme]);
 }
 
-function App() {
+function App({ accountUser = null, onLogout = null }) {
   const [data, setData] = useState(empty),
     [selected, setSelected] = useState(null),
     [query, setQuery] = useState(""),
+    [taskFilter, setTaskFilter] = useState("all"),
     [archived, setArchived] = useState(false),
     [sidebar, setSidebar] = useState(false),
     [collapsed, setCollapsed] = useState(false),
@@ -85,15 +104,18 @@ function App() {
     [log, setLog] = useState(null),
     [menu, setMenu] = useState(false),
     [loading, setLoading] = useState(false),
-    [olderBusy, setOlderBusy] = useState(false);
+    [olderBusy, setOlderBusy] = useState(false),
+    [selectedComputer, setSelectedComputer] = useState("");
   const selectedRef = useRef(selected),
     knownRuns = useRef(null),
     lastData = useRef(""),
     loadedRef = useRef(null),
     scroller = useRef(null),
     nearBottom = useRef(true),
-    input = useRef(null);
+    input = useRef(null),
+    computerRef = useRef(selectedComputer);
   selectedRef.current = selected;
+  computerRef.current = selectedComputer;
   const task = data.jobs.find((j) => j.slug === selected),
     prefs = data.settings;
   const currentModel = task
@@ -108,6 +130,12 @@ function App() {
       if (signature !== lastData.current) {
         lastData.current = signature;
         setData(result);
+        if (!computerRef.current && result.computers?.length) {
+          computerRef.current = result.computers[0].id;
+          setSelectedComputer(result.computers[0].id);
+          if (result.computers[0].defaults?.model)
+            setDraftModel(result.computers[0].defaults);
+        }
       }
       setConnected(true);
       const terminal = result.runs.filter((r) =>
@@ -115,7 +143,8 @@ function App() {
       );
       if (
         knownRuns.current &&
-        result.settings.notifications && !result.settings.desktop_notifications &&
+        result.settings.notifications &&
+        !result.settings.desktop_notifications &&
         "Notification" in window &&
         Notification.permission === "granted"
       )
@@ -200,6 +229,11 @@ function App() {
       setError(e.message);
     }
   }
+  useEffect(() => {
+    if (!input.current) return;
+    input.current.style.height = "auto";
+    input.current.style.height = `${Math.min(input.current.scrollHeight, 220)}px`;
+  }, [text, selected]);
   async function send(e) {
     e.preventDefault();
     if (!text.trim() || sending) return;
@@ -215,7 +249,12 @@ function App() {
       const result = await request("/api/message", "POST", {
         slug: selected,
         text: value,
-        options: selected ? undefined : draftModel || undefined,
+        options: selected
+          ? undefined
+          : {
+              ...(draftModel || {}),
+              ...(selectedComputer ? { computer_id: selectedComputer } : {}),
+            },
       });
       setText("");
       if (result.slug !== selected) {
@@ -257,21 +296,47 @@ function App() {
   const closeSettings = useCallback(() => setSettingsOpen(false), []),
     closeEditor = useCallback(() => setEditor(false), []),
     closeLog = useCallback(() => setLog(null), []);
-  const filtered = data.jobs.filter(
-    (j) =>
-      (archived ? j.state === "archived" : j.state !== "archived") &&
-      (projectFilter === "all" || (projectFilter === "unassigned" ? !j.task_project_id : j.task_project_id === projectFilter)) &&
-      j.title.toLowerCase().includes(query.toLowerCase()),
-  ).sort((a,b) => a.title.localeCompare(b.title));
+  useEffect(() => {
+    const escape = (event) => {
+      if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
+        setMenu(false);
+        if (sidebar) {
+          setSidebar(false);
+          document.querySelector('[aria-label="Open sidebar"]')?.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
+  }, [sidebar]);
+  const filtered = data.jobs
+    .filter(
+      (j) =>
+        (archived ? j.state === "archived" : j.state !== "archived") &&
+        (projectFilter === "all" ||
+          (projectFilter === "unassigned"
+            ? !j.task_project_id
+            : j.task_project_id === projectFilter)) &&
+        (taskFilter === "all" ||
+          (taskFilter === "attention"
+            ? errorStates.includes(j.last_status)
+            : j.state === "enabled")) &&
+        j.title.toLowerCase().includes(query.toLowerCase()),
+    )
+    .sort((a, b) => a.title.localeCompare(b.title));
   async function createProject(e) {
     e.preventDefault();
     const name = projectName.trim();
     if (!name) return;
     try {
       const result = await request("/api/projects", "POST", { name });
-      setProjectName(""); setProjectCreating(false); setProjectFilter(result.id);
+      setProjectName("");
+      setProjectCreating(false);
+      setProjectFilter(result.id);
       await refresh();
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      setError(e.message);
+    }
   }
   const disabled =
     sending ||
@@ -307,6 +372,15 @@ function App() {
         >
           <Plus size={18} />
         </IconButton>
+        <button
+          className="attach-files-button"
+          type="button"
+          onClick={() => setEditor(true)}
+          aria-label="Attach files"
+        >
+          <Paperclip size={17} />
+          <span>Attach files</span>
+        </button>
         <ComposerModelPicker
           key={selected || "new"}
           {...currentModel}
@@ -339,11 +413,17 @@ function App() {
   );
   return (
     <div className={`app ${collapsed ? "sidebar-collapsed" : ""}`}>
+      <a className="skip-link" href="#main-content">
+        Skip to content
+      </a>
       <div
         className={`sidebar-backdrop ${sidebar ? "visible" : ""}`}
         onClick={() => setSidebar(false)}
       />
-      <aside className={sidebar ? "open" : ""}>
+      <aside
+        aria-label="Workspace navigation"
+        className={sidebar ? "open" : ""}
+      >
         <div className="brand-row">
           <button className="brand" onClick={() => select(null)}>
             <span className="brand-mark">
@@ -362,8 +442,8 @@ function App() {
           </IconButton>
         </div>
         <button className="new-task" onClick={() => select(null)}>
-          <Plus size={17} />
-          New task<span>↵</span>
+          <SquarePen size={18} />
+          New task
         </button>
         <label className="search">
           <Search size={14} />
@@ -374,40 +454,144 @@ function App() {
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
-        {!archived && <section className="sidebar-section projects-section">
-          <div className="section-heading">
-            <button className="section-title" onClick={() => setProjectFilter("all")}>Projects</button>
-            <button className="section-action" aria-label="New project" title="New project" onClick={() => setProjectCreating(true)}><Plus size={15}/></button>
-          </div>
-          {projectCreating && <form className="inline-project-form" onSubmit={createProject}>
-            <Folder size={15}/><input autoFocus aria-label="Project name" placeholder="Project name" value={projectName} onChange={(e) => setProjectName(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") { setProjectCreating(false); setProjectName(""); } }}/>
-            <button type="submit" aria-label="Create project" disabled={!projectName.trim()}><Check size={14}/></button>
-            <button type="button" aria-label="Cancel" onClick={() => { setProjectCreating(false); setProjectName(""); }}><X size={14}/></button>
-          </form>}
-          <div className="project-list">
-            {data.projects.map((project) => <div className={`project-row ${projectFilter === project.id ? "selected" : ""}`} key={project.id}>
-              <button className="project-select" onClick={() => setProjectFilter(project.id)}><span className="project-sidebar-icon" style={{color:project.color || undefined}}>{project.icon || <Folder size={15}/>}</span><span>{project.name}</span><small>{project.task_count}</small></button>
-              <button className="project-menu" aria-label={`Edit ${project.name}`} onClick={() => setProjectEditor(project)}><MoreHorizontal size={15}/></button>
-            </div>)}
-            <button className={`project-select unassigned ${projectFilter === "unassigned" ? "selected" : ""}`} onClick={() => setProjectFilter("unassigned")}><Folder size={15}/><span>Unassigned</span></button>
-          </div>
-        </section>}
+        {!archived && (
+          <section className="sidebar-section projects-section">
+            <div className="section-heading">
+              <button
+                className="section-title"
+                onClick={() => setProjectFilter("all")}
+              >
+                Projects
+              </button>
+              {!data.remote && <button
+                className="section-action"
+                aria-label="New project"
+                title="New project"
+                onClick={() => setProjectCreating(true)}
+              >
+                <Plus size={15} />
+              </button>}
+            </div>
+            {projectCreating && (
+              <form className="inline-project-form" onSubmit={createProject}>
+                <Folder size={15} />
+                <input
+                  autoFocus
+                  aria-label="Project name"
+                  placeholder="Project name"
+                  value={projectName}
+                  onChange={(e) => setProjectName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      setProjectCreating(false);
+                      setProjectName("");
+                    }
+                  }}
+                />
+                <button
+                  type="submit"
+                  aria-label="Create project"
+                  disabled={!projectName.trim()}
+                >
+                  <Check size={14} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Cancel"
+                  onClick={() => {
+                    setProjectCreating(false);
+                    setProjectName("");
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              </form>
+            )}
+            <div className="project-list">
+              {data.projects.map((project) => (
+                <div
+                  className={`project-row ${projectFilter === project.id ? "selected" : ""}`}
+                  key={project.id}
+                >
+                  <button
+                    className="project-select"
+                    onClick={() => setProjectFilter(project.id)}
+                  >
+                    <span
+                      className="project-sidebar-icon"
+                      style={{ color: project.color || undefined }}
+                    >
+                      {project.icon || <Folder size={15} />}
+                    </span>
+                    <span>{project.name}</span>
+                    <small>{project.task_count}</small>
+                  </button>
+                  {!data.remote && <button
+                    className="project-menu"
+                    aria-label={`Edit ${project.name}`}
+                    onClick={() => setProjectEditor(project)}
+                  >
+                    <MoreHorizontal size={15} />
+                  </button>}
+                </div>
+              ))}
+              <button
+                className={`project-select unassigned ${projectFilter === "unassigned" ? "selected" : ""}`}
+                onClick={() => setProjectFilter("unassigned")}
+              >
+                <Folder size={15} />
+                <span>Unassigned</span>
+              </button>
+            </div>
+          </section>
+        )}
         <div className="section-heading tasks-heading">
-          <button className="section-title" onClick={() => setProjectFilter("all")}>{archived ? "Archived" : projectFilter === "all" ? "Tasks" : data.projects.find((p) => p.id === projectFilter)?.name || "Unassigned"}</button>
+          <button
+            className="section-title"
+            onClick={() => setProjectFilter("all")}
+          >
+            {archived
+              ? "Archived"
+              : projectFilter === "all"
+                ? "Tasks"
+                : data.projects.find((p) => p.id === projectFilter)?.name ||
+                  "Unassigned"}
+          </button>
           <button
             className={archived ? "active-filter" : ""}
             aria-label={archived ? "Show current tasks" : "Show archived tasks"}
             title={archived ? "Show current tasks" : "Show archived tasks"}
-            onClick={() => { setArchived(!archived); setProjectFilter("all"); }}
+            onClick={() => {
+              setArchived(!archived);
+              setProjectFilter("all");
+              setTaskFilter("all");
+            }}
           >
             <Archive size={13} />
           </button>
+        </div>
+        <div className="task-filters" aria-label="Filter tasks">
+          {[
+            ["all", "All"],
+            ["scheduled", "Scheduled"],
+            ["attention", "Attention"],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              aria-pressed={taskFilter === id}
+              onClick={() => setTaskFilter(id)}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         <nav aria-label="Task conversations">
           {filtered.map((j) => (
             <button
               key={j.slug}
               className={`task-link ${selected === j.slug ? "selected" : ""}`}
+              aria-current={selected === j.slug ? "page" : undefined}
+              title={j.title}
               onClick={() => select(j.slug)}
             >
               {j.config.mode === "monitor" ? (
@@ -432,7 +616,7 @@ function App() {
           ))}
           {filtered.length === 0 && (
             <p className="nav-empty">
-              {query
+              {query || taskFilter !== "all"
                 ? "No matching tasks"
                 : archived
                   ? "Nothing archived"
@@ -441,23 +625,52 @@ function App() {
           )}
         </nav>
         <div className="sidebar-bottom">
-          <button onClick={() => setSettingsOpen(true)}>
+          {onLogout ? (
+            <button
+              className="account-summary"
+              title={accountUser?.email || "OnCue account"}
+              onClick={onLogout}
+            >
+              {accountUser?.picture ? (
+                <img src={accountUser.picture} alt="" referrerPolicy="no-referrer" />
+              ) : (
+                <span>{(accountUser?.email || "O")[0].toUpperCase()}</span>
+              )}
+              <span>{accountUser?.email || "Sign out"}</span>
+            </button>
+          ) : (
+            <div className="account-summary" title="Available on this computer">
+              <span>L</span>
+              <span>Local only</span>
+            </div>
+          )}
+          {!data.remote && <button onClick={() => setSettingsOpen(true)}>
             <Settings2 size={16} />
             Settings
-          </button>
+          </button>}
           <div className="service-status">
             <span
               className={`status-dot ${connected && data.scheduler_active ? "ready" : ""}`}
             />
             {connected
-              ? data.scheduler_active
-                ? "Running on this computer"
+              ? data.remote
+                ? data.scheduler_active
+                  ? `${data.computers.filter((computer) => computer.online).length} computer${data.computers.filter((computer) => computer.online).length === 1 ? "" : "s"} online`
+                  : "Computers are offline"
+                : data.scheduler_active
+                ? data.account?.configured
+                  ? data.account.sync_error
+                    ? "Running · sync needs attention"
+                    : data.account.last_sync_at
+                      ? `Running · synced ${formatDate(data.account.last_sync_at)}`
+                      : "Running · waiting to sync"
+                  : "Running on this computer"
                 : "Scheduler is offline"
               : "Reconnecting…"}
           </div>
         </div>
       </aside>
-      <main>
+      <main id="main-content" tabIndex={-1}>
         <header className="topbar">
           <IconButton
             label="Open sidebar"
@@ -477,7 +690,9 @@ function App() {
                 <strong>{task.title}</strong>
               </>
             ) : (
-              <span>New task</span>
+              <strong className="home-title">
+                OnCue <span>Your time, back.</span>
+              </strong>
             )}
           </div>
           <div className="top-actions">
@@ -542,7 +757,7 @@ function App() {
                             </button>
                           </>
                         )}
-                        <button
+                        {!data.remote && <button
                           onClick={() => {
                             setMenu(false);
                             action(() => exportHistory(task.slug));
@@ -550,7 +765,7 @@ function App() {
                         >
                           <Download size={14} />
                           Export history
-                        </button>
+                        </button>}
                         {task.state !== "archived" && (
                           <button
                             onClick={() => {
@@ -568,13 +783,16 @@ function App() {
                             Archive task
                           </button>
                         )}
-                        <button
+                        {!data.remote && <button
                           className="danger-action"
-                          onClick={() => { setMenu(false); setDeleteTarget(task); }}
+                          onClick={() => {
+                            setMenu(false);
+                            setDeleteTarget(task);
+                          }}
                         >
                           <Trash2 size={14} />
                           Delete task
-                        </button>
+                        </button>}
                       </div>
                     </>
                   )}
@@ -587,10 +805,10 @@ function App() {
           <div className="landing">
             <div className="welcome">
               <span className="welcome-mark">
-                <Clock3 size={29} />
+                <Sparkles size={27} />
               </span>
-              <h1>A little less on your plate.</h1>
-              <p>Tell me what to do and when. I’ll take it from there.</p>
+              <h1>What can I take off your plate?</h1>
+              <p>Make room for what matters. Give me a task and a time.</p>
             </div>
             <div className="landing-composer">
               {composer}
@@ -600,22 +818,25 @@ function App() {
                   [
                     "daily",
                     Clock3,
-                    "A daily briefing",
+                    "Start your day informed",
+                    "A daily briefing, ready when you are.",
                     "Every weekday at 8 AM, give me a short briefing on the latest AI news, with sources.",
                   ],
                   [
                     "monitor",
                     Eye,
                     "Keep an eye on something",
+                    "Follow updates and know when things change.",
                     "Check every Monday at 9 AM whether an official release date has been announced for ",
                   ],
                   [
                     "once",
                     CalendarDays,
-                    "A one-time task",
+                    "Plan something for later",
+                    "The right task, at the right time.",
                     "Tomorrow at 9 AM, give me ",
                   ],
-                ].map(([id, Icon, title, prompt]) => (
+                ].map(([id, Icon, title, description, prompt]) => (
                   <button
                     key={id}
                     onClick={() => {
@@ -623,16 +844,40 @@ function App() {
                       input.current?.focus();
                     }}
                   >
-                    <Icon size={15} />
-                    {title}
+                    <span className={`suggestion-icon ${id}`}>
+                      <Icon size={19} />
+                    </span>
+                    <strong>{title}</strong>
+                    <small>{description}</small>
+                    <ArrowRight size={16} className="suggestion-arrow" />
                   </button>
                 ))}
               </div>
             </div>
             <p className="landing-footnote">
-              <span className="status-dot ready" />
+              <Laptop size={14} />
               Runs locally. Your computer needs to be awake and connected.
             </p>
+            {data.computers?.length > 1 && (
+              <label className="computer-picker">
+                Run new tasks on
+                <select
+                  value={selectedComputer}
+                  onChange={(event) => {
+                    computerRef.current = event.target.value;
+                    setSelectedComputer(event.target.value);
+                    const computer = data.computers.find((item) => item.id === event.target.value);
+                    if (computer?.defaults?.model) setDraftModel(computer.defaults);
+                  }}
+                >
+                  {data.computers.map((computer) => (
+                    <option key={computer.id} value={computer.id}>
+                      {computer.name} · {computer.online ? "online" : "offline"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
         ) : (
           <>
@@ -709,7 +954,7 @@ function App() {
                         request(`/api/runs/${id}/retry`, "POST", { minutes }),
                       )
                     }
-                    onLog={(id) =>
+                    onLog={data.remote ? undefined : (id) =>
                       action(async () =>
                         setLog(await request(`/api/runs/${id}/log`)),
                       )
@@ -792,6 +1037,8 @@ function App() {
           task={task}
           settings={{ ...prefs, ...draftModel }}
           initialText={text}
+          remote={!!data.remote}
+          computerId={task?.computer_id || selectedComputer}
           onClose={closeEditor}
           onSaved={(slug) => {
             select(slug);
@@ -799,19 +1046,49 @@ function App() {
           }}
         />
       )}
-      {projectEditor && <ProjectPanel project={projectEditor} onClose={() => setProjectEditor(null)} onSaved={refresh} />}
-      {deleteTarget && <Modal title="Delete task?" onClose={() => setDeleteTarget(null)}>
-        <div className="confirm-dialog">
-          <p><strong>{deleteTarget.title}</strong> and its conversation, run history, outputs, and task files will be permanently deleted.</p>
-          <div className="modal-footer">
-            <button type="button" className="quiet" onClick={() => setDeleteTarget(null)}>Cancel</button>
-            <button type="button" className="danger-button" onClick={() => action(async () => {
-              await request(`/api/tasks/${deleteTarget.slug}`, "DELETE", {});
-              setDeleteTarget(null); select(null);
-            })}>Delete permanently</button>
+      {projectEditor && (
+        <ProjectPanel
+          project={projectEditor}
+          onClose={() => setProjectEditor(null)}
+          onSaved={refresh}
+        />
+      )}
+      {deleteTarget && (
+        <Modal title="Delete task?" onClose={() => setDeleteTarget(null)}>
+          <div className="confirm-dialog">
+            <p>
+              <strong>{deleteTarget.title}</strong> and its conversation, run
+              history, outputs, and task files will be permanently deleted.
+            </p>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="quiet"
+                onClick={() => setDeleteTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="danger-button"
+                onClick={() =>
+                  action(async () => {
+                    await request(
+                      `/api/tasks/${deleteTarget.slug}`,
+                      "DELETE",
+                      {},
+                    );
+                    setDeleteTarget(null);
+                    select(null);
+                  })
+                }
+              >
+                Delete permanently
+              </button>
+            </div>
           </div>
-        </div>
-      </Modal>}
+        </Modal>
+      )}
       {log && (
         <Modal title="Execution log" onClose={closeLog} wide>
           <div className="log-body">
@@ -825,6 +1102,169 @@ function App() {
         </Modal>
       )}
     </div>
+  );
+}
+
+function AccountGate({ config }) {
+  const {
+    isLoading,
+    isAuthenticated,
+    loginWithRedirect,
+    logout,
+    getAccessTokenSilently,
+    user,
+    error,
+  } = useAuth0();
+  const [ready, setReady] = useState(config.mode === "cloud"),
+    [claimed, setClaimed] = useState(config.mode === "cloud"),
+    [problem, setProblem] = useState("");
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setAccessTokenProvider(null);
+      setReady(false);
+      return;
+    }
+    setAccessTokenProvider(() =>
+      getAccessTokenSilently({
+        authorizationParams: { audience: config.auth0_audience },
+      }),
+    );
+    if (config.mode === "cloud") {
+      setReady(true);
+      setClaimed(true);
+      return;
+    }
+    getAccessTokenSilently({
+      authorizationParams: { audience: config.auth0_audience },
+    })
+      .then(() => request("/api/account/session", "POST", {}))
+      .then((value) => {
+        setClaimed(value.claimed);
+        setReady(true);
+      })
+      .catch((e) => setProblem(e.message));
+  }, [isAuthenticated, getAccessTokenSilently, config]);
+  async function claim() {
+    try {
+      await request("/api/account/claim", "POST", {
+        name: navigator.userAgentData?.platform || "OnCue computer",
+      });
+      setClaimed(true);
+    } catch (e) {
+      setProblem(e.message);
+    }
+  }
+  if (isLoading)
+    return (
+      <div className="account-gate">
+        <LoaderCircle className="spin" />
+        <p>Checking your account…</p>
+      </div>
+    );
+  if (!isAuthenticated)
+    return (
+      <div className="account-gate">
+        <span className="welcome-mark">
+          <Clock3 size={29} />
+        </span>
+        <h1>Welcome to OnCue</h1>
+        <p>Sign in to reach your tasks from any device.</p>
+        {(error || problem) && (
+          <ErrorNotice>{error?.message || problem}</ErrorNotice>
+        )}
+        <button
+          className="primary"
+          onClick={() =>
+            loginWithRedirect({
+              authorizationParams: { connection: "google-oauth2" },
+            })
+          }
+        >
+          Continue with Google
+        </button>
+      </div>
+    );
+  if (!ready)
+    return (
+      <div className="account-gate">
+        <LoaderCircle className="spin" />
+        <p>Connecting this installation…</p>
+        {problem && <ErrorNotice>{problem}</ErrorNotice>}
+      </div>
+    );
+  if (!claimed)
+    return (
+      <div className="account-gate">
+        <Laptop size={32} />
+        <h1>Link this computer</h1>
+        <p>
+          Claim the existing tasks for <strong>{user?.email}</strong> and upload
+          their task history. Provider credentials, logs, workspaces, and
+          attachments stay here.
+        </p>
+        {problem && <ErrorNotice>{problem}</ErrorNotice>}
+        <button className="primary" onClick={claim}>
+          Claim tasks and link computer
+        </button>
+        <button
+          className="quiet"
+          onClick={() =>
+            logout({ logoutParams: { returnTo: location.origin } })
+          }
+        >
+          Use another account
+        </button>
+      </div>
+    );
+  return (
+    <App
+      accountUser={user}
+      onLogout={() => logout({ logoutParams: { returnTo: location.origin } })}
+    />
+  );
+}
+
+function AccountBootstrap() {
+  const [config, setConfig] = useState(null),
+    [error, setError] = useState("");
+  useEffect(() => {
+    fetch("/api/account/status", { cache: "no-store" })
+      .then(async (r) => {
+        if (!r.ok) throw new Error("Account configuration is unavailable");
+        return r.json();
+      })
+      .then(setConfig)
+      .catch((e) => setError(e.message));
+  }, []);
+  if (error)
+    return (
+      <div className="account-gate">
+        <h1>OnCue needs account configuration</h1>
+        <p>{error}</p>
+      </div>
+    );
+  if (!config)
+    return (
+      <div className="account-gate">
+        <LoaderCircle className="spin" />
+      </div>
+    );
+  if (!config.configured) return <App />;
+  return (
+    <Auth0Provider
+      domain={config.auth0_domain}
+      clientId={config.auth0_client_id}
+      cacheLocation="memory"
+      useRefreshTokens
+      useRefreshTokensFallback
+      authorizationParams={{
+        redirect_uri: location.origin,
+        audience: config.auth0_audience,
+        scope: "openid profile email",
+      }}
+    >
+      <AccountGate config={config} />
+    </Auth0Provider>
   );
 }
 
@@ -847,6 +1287,6 @@ class ErrorBoundary extends React.Component {
 }
 createRoot(document.getElementById("root")).render(
   <ErrorBoundary>
-    <App />
+    <AccountBootstrap />
   </ErrorBoundary>,
 );

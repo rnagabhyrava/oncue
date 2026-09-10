@@ -1,5 +1,7 @@
 """Local task UI and same-origin API. Private content requires a session token."""
 import json
+import base64
+import hashlib
 import secrets
 import socket
 import sqlite3
@@ -31,6 +33,7 @@ def overview(store: Store) -> dict[str, Any]:
             "timezone": row["timezone"], "runner": row["runner"], "model": row["model"],
             "reasoning_effort": row["reasoning_effort"], "sandbox": row["sandbox"], "auto_approve": bool(row["auto_approve"]),
             "connection": row["connection_slug"], "timeout": row["timeout_seconds"],
+            "revision": row["remote_revision"],
             "state": state, "last_status": row["last_status"], "last_finished_at": row["last_finished_at"],
         })
     runs = [dict(row) for row in store.recent_runs(30)]
@@ -52,6 +55,7 @@ def task_list(store):
     for job in result['jobs']:
         full=store.job(job['slug'],include_archived=True)
         job['provider']=full['provider']
+        job['instructions']=full['command']
         job['config']=json.loads(full['task_config'])
         scheduled = once_at(job['schedule'])
         occurrence = store.connection.execute(
@@ -68,11 +72,47 @@ def task_list(store):
     result['scheduler_active'] = bool(heartbeat and (datetime.now(timezone.utc) - datetime.fromisoformat(heartbeat['last_tick'])).total_seconds() < 90)
     result['settings']=get_settings(store)
     result['projects']=[dict(row) for row in store.task_projects()]
+    from .remote import account_state
+    remote = account_state(store.path.parent)
+    result['account'] = {key: remote.get(key) for key in ('configured', 'claimed', 'last_sync_at', 'sync_error')}
     return result
 
 
 def _handler(database_path: Path):
     csrf_token = secrets.token_urlsafe(32)
+    browser_sessions = {}
+    from .remote import cloud_config
+    account_config = cloud_config()
+    remote_sources = []
+    for candidate in ("https://" + account_config["auth0_domain"].strip("/"), account_config["cloud_url"]):
+        parsed = urlsplit(candidate)
+        if parsed.scheme in ("http", "https") and parsed.hostname:
+            remote_sources.append(f"{parsed.scheme}://{parsed.netloc}")
+
+    def remember_token(token):
+        try:
+            payload = token.split('.')[1]
+            payload += '=' * (-len(payload) % 4)
+            expires = int(json.loads(base64.urlsafe_b64decode(payload))["exp"])
+        except (ValueError, KeyError, IndexError, TypeError):
+            expires = int(datetime.now(timezone.utc).timestamp()) + 300
+        browser_sessions[hashlib.sha256(token.encode()).digest()] = expires
+
+    def signed_in(headers):
+        from .remote import cloud_config
+        if not all(cloud_config().values()):
+            return True
+        authorization = headers.get('Authorization', '')
+        if not authorization.startswith('Bearer '):
+            return False
+        token = authorization[7:]
+        expires = browser_sessions.get(hashlib.sha256(token.encode()).digest(), 0)
+        return expires > datetime.now(timezone.utc).timestamp()
+
+    def installation_claimed():
+        from .remote import account_state
+        state = account_state(database_path.parent)
+        return not state["configured"] or state["claimed"]
 
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -87,7 +127,12 @@ def _handler(database_path: Path):
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('X-Frame-Options', 'DENY')
             self.send_header('Referrer-Policy', 'no-referrer')
-            self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+            sources = " ".join(dict.fromkeys(remote_sources))
+            frame_source = remote_sources[0] if remote_sources else "'none'"
+            self.send_header('Content-Security-Policy',
+                f"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' {sources}; "
+                f"frame-src {frame_source}; img-src 'self' data: https:; "
+                "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
             self.end_headers()
             self.wfile.write(body)
 
@@ -119,8 +164,18 @@ def _handler(database_path: Path):
                 mime = {'/': 'text/html', '/app.js': 'text/javascript', '/app.css': 'text/css', '/favicon.svg':'image/svg+xml'}[self.path]
                 self._headers(200, mime + '; charset=utf-8', body)
                 return
+            if self.path == '/api/account/status':
+                from .remote import account_state
+                self._json(200, account_state(database_path.parent))
+                return
             if not self._write_allowed():
                 self._json(403, {'error': 'Session token required'})
+                return
+            if not signed_in(self.headers):
+                self._json(401, {'error': 'Sign in with Google to use OnCue'})
+                return
+            if not installation_claimed():
+                self._json(428, {'error': 'Claim this installation before accessing its tasks'})
                 return
             store = Store(database_path)
             try:
@@ -192,9 +247,31 @@ def _handler(database_path: Path):
             if not self._write_allowed():
                 self._json(403, {'error': 'Session token and same origin required'})
                 return
+            if self.path == '/api/account/session':
+                authorization = self.headers.get('Authorization', '')
+                if not authorization.startswith('Bearer '):
+                    self._json(401, {'error': 'Sign in required'}); return
+                try:
+                    from .remote import verify_session
+                    result = verify_session(database_path.parent, authorization[7:])
+                    remember_token(authorization[7:])
+                    self._json(200, result)
+                except ValueError as error:
+                    self._json(401, {'error': str(error)})
+                return
+            if not signed_in(self.headers):
+                self._json(401, {'error': 'Sign in with Google to use OnCue'})
+                return
+            if self.path != '/api/account/claim' and not installation_claimed():
+                self._json(428, {'error': 'Claim this installation before accessing its tasks'})
+                return
             store = None
             try:
                 data = self._read_json()
+                if self.path == '/api/account/claim':
+                    from .remote import claim_installation
+                    self._json(201, claim_installation(database_path.parent, self.headers['Authorization'][7:], data.get('name')))
+                    return
                 store = Store(database_path)
                 parts = self.path.split('/')
                 if self.path == '/api/settings':
@@ -287,6 +364,9 @@ def serve(store, host, port):
     server = Server((host, port), _handler(store.path.resolve()))
     scheduler = LocalScheduler(store.path)
     scheduler.start()
+    from .remote import SyncAgent
+    sync_agent = SyncAgent(store.path)
+    sync_agent.start()
     import os
     from .store import process_start_ticks
     marker=store.path.parent/'service.json'
@@ -299,6 +379,7 @@ def serve(store, host, port):
         pass
     finally:
         server.server_close()
+        sync_agent.stop()
         scheduler.stop()
         from .auth import close_sessions
         close_sessions()

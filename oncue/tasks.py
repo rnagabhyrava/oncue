@@ -8,7 +8,8 @@ from pathlib import Path
 from .schedules import from_form, once_at, validate_schedule
 
 
-def save_task(store, data: dict, slug: str | None = None) -> str:
+def save_task(store, data: dict, slug: str | None = None, *, commit: bool = True,
+              new_slug: str | None = None) -> str:
     from .settings import get_settings
     settings = get_settings(store)
     existing = store.job(slug) if slug else None
@@ -77,33 +78,33 @@ def save_task(store, data: dict, slug: str | None = None) -> str:
         store.update_job(slug, schedule, timeout, runner, model, effort, zone, sandbox, auto,
                          existing['connection_slug'], enabled, instructions, commit=False)
         if 'task_project_id' in data:
-            store.set_task_project(slug, data['task_project_id'])
+            store.set_task_project(slug, data['task_project_id'], commit=False)
     else:
         base = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')[:40] or 'task'
-        slug = f'{base}-{uuid.uuid4().hex[:8]}'
+        slug = new_slug or f'{base}-{uuid.uuid4().hex[:8]}'
         project = data.get('project')
         if not project:
             project = slug
             workspace = store.path.parent / 'workspaces' / slug
             workspace.mkdir(parents=True, mode=0o700)
-            store.add_project(project, workspace)
+            store.add_project(project, workspace, commit=False)
         store.add_job(slug, project, schedule, instructions, None, timeout, runner, model,
                       effort, zone, sandbox, auto, enabled=enabled, commit=False)
         if data.get('task_project_id') is not None:
-            store.set_task_project(slug, data['task_project_id'])
+            store.set_task_project(slug, data['task_project_id'], commit=False)
     store.connection.execute('UPDATE jobs SET title = ?, provider=?, task_config=?, completed_at=NULL WHERE slug = ?', (title, provider, json.dumps(cfg), slug))
-    store.connection.commit()
+    if commit: store.connection.commit()
     return slug
 
 
-def queue_manual(store, slug: str) -> int:
+def queue_manual(store, slug: str, *, scheduled_for: str | None = None, commit: bool = True) -> int:
     job = store.job(slug)
     if not job:
         raise ValueError('Task not found or archived')
     if json.loads(job['task_config']).get('mode') in ('draft','chat'):
         raise ValueError('Finish scheduling this conversation before running the task. Use Task details or send a schedule.')
-    key = 'manual:' + datetime.now(timezone.utc).isoformat()
-    return store.queue_run(job['id'], key)
+    key = scheduled_for or 'manual:' + datetime.now(timezone.utc).isoformat()
+    return store.queue_run(job['id'], key, commit=commit)
 
 
 def read_output(store, run_id: int, log: bool = False) -> dict:

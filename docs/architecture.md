@@ -84,6 +84,29 @@ plugin/skill is in `integrations/oncue`. MCP schemas are enforced before dispatc
 including nested updates; shell execution is reserved for the local UI/CLI. Coding agents do not implicitly transfer
 their account, model, or tool permissions into scheduled tasks.
 
+## Accounts and remote access
+
+Auth0 Universal Login supplies Google identity. The hosted API verifies RS256
+access tokens by issuer, audience, expiry, signature, and Google connection
+subject. Account identity is the `(issuer, subject)` pair; email is display-only.
+
+Each installation belongs to one account and receives a revocable computer
+credential after an explicit claim. The credential is stored in a mode-0600 file
+outside SQLite, while the server stores only its SHA-256 digest. The desktop
+process makes outbound HTTPS requests, uploads a cloud-safe projection under a
+monotonic sequence, and polls for commands. No inbound port is opened.
+
+Local SQLite remains authoritative. Remote commands carry stable IDs and expected
+task revisions; the local receipt table deduplicates delivery and rejects edits
+based on stale projections. Commands are applied through the same task service as
+local UI actions. The cloud stores task/project definitions, conversations, run
+metadata, and response text. It excludes credentials, logs, paths, workspaces,
+attachments, and provider execution snapshots.
+
+The separate `cloud_service` FastAPI application owns accounts, computers, latest
+snapshots, and 24-hour command records in PostgreSQL. It serves the same compiled
+React interface and performs account ownership checks on every protected query.
+
 ## Credentials, storage and distribution
 
 Credentials stay in provider-owned storage. Managed Codex login uses a separate
