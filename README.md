@@ -14,16 +14,18 @@ keeps every response in a conversation of its own.
 
 ## Get started
 
-The Linux bundle installs with `sh install.sh`, includes Python and both AI
-runtimes, and opens the web UI. See [installation instructions](START.md) for
-downloads, local builds, and clean removal. After installing, launch
-**OnCue** from your application menu or run `oncue open`.
-
-From this checkout, with Python 3.11+:
+Install on Linux x86_64 with glibc 2.38+ (for example, Ubuntu 24.04+):
 
 ```bash
-python3 -m oncue open
+curl -fsSL https://github.com/rnagabhyrava/oncue/releases/latest/download/install.sh -o install.sh
+sh install.sh
 ```
+
+The bundle includes Python, the web UI, and both AI runtimes. Installation starts
+scheduling and opens the UI; no sudo or separate Python/Node setup is needed.
+Later, launch **OnCue** from your application menu or run `~/.local/bin/oncue open`.
+See [START.md](START.md) for updates, startup at login, uninstalling, and running
+from source.
 
 First boot selects **OpenCode → Big Pickle**, a free model that needs no login.
 Use the model picker below the message box to choose another model.

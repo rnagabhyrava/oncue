@@ -2,6 +2,29 @@
 
 ## CLI
 
+Install using [START.md](../START.md). These examples assume `~/.local/bin` is on
+your PATH; otherwise use `~/.local/bin/oncue` in place of `oncue`.
+
+App lifecycle commands:
+
+```bash
+oncue open                 # Start scheduling and open the web UI
+oncue start                # Start without opening a browser
+oncue stop                 # Stop scheduling; active tasks may finish
+oncue install-startup      # Optional Linux sign-in startup (systemd)
+oncue install-launcher     # Create or refresh the application-menu shortcut
+oncue uninstall            # Portable installs: remove app, retain history
+```
+
+`uninstall --purge-data` also permanently deletes default task storage, including
+the separate OnCue login. Custom storage requires manual removal. Shared provider
+logins outside the app data directory are retained. `install-launcher` and
+`uninstall` accept `--prefix /absolute/path` for custom installation locations.
+`prepare-update` stops dispatch and refuses to proceed while recorded workers
+are alive; the portable installer uses it before replacing app files.
+
+Task and settings commands:
+
 ```bash
 oncue open
 oncue settings --set '{"provider":"codex","model":"YOUR_MODEL","timezone":"America/Chicago"}'
