@@ -1,5 +1,9 @@
 include README.md START.md AGENTS.md CONTRIBUTING.md SECURITY.md CHANGELOG.md LICENSE
-recursive-include docs *.md
+recursive-include docs *.md *.png
 recursive-include systemd *.service *.timer *.example
-recursive-include examples README.md *.sh .gitkeep .gitignore
-include examples/demo-project/data/activity.log
+
+include package.json package-lock.json vite.config.js
+recursive-include frontend *.js *.jsx *.css *.html
+recursive-include integrations *.json *.md
+include integrations/oncue/.mcp.json integrations/oncue/.codex-plugin/plugin.json
+recursive-include scripts *.py *.sh *.txt

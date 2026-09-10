@@ -3,9 +3,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codex-local-scheduler"
-version = "0.2.0"
-description = "A local-first, systemd-backed scheduler for command and Codex workflows"
+name = "oncue"
+version = "0.3.0"
+description = "OnCue: local AI task scheduling with conversations, monitors and saved responses"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -26,14 +26,19 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Repository = "https://github.com/rnagabhyrava/codex-local-scheduler"
-Issues = "https://github.com/rnagabhyrava/codex-local-scheduler/issues"
+Repository = "https://github.com/rnagabhyrava/oncue"
+Issues = "https://github.com/rnagabhyrava/oncue/issues"
 
 [project.optional-dependencies]
 dev = ["build>=1.2"]
 
 [project.scripts]
-codex-local-scheduler = "codex_local_scheduler.__main__:main"
+oncue = "oncue.__main__:main"
+codex-local-scheduler = "oncue.__main__:main"
 
 [tool.setuptools]
-packages = ["codex_local_scheduler"]
+packages = ["oncue"]
+include-package-data = false
+
+[tool.setuptools.package-data]
+oncue = ["static/*.html", "static/*.css", "static/*.js"]

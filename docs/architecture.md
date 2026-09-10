@@ -1,85 +1,93 @@
-# Architecture
+# How OnCue works
 
-```
-systemd timer
-    |
-    v
-codex-local-scheduler run-due
-    |
-    +--> SQLite: projects, connections, jobs, run history
-    |
-    +--> SQLite: persist due runs as queued
-    |
-    +--> systemd worker service per queued run
-              |
-              +--> project-scoped command or Codex runner
-                    |
-                    +--> local project folder
-                    +--> owner-only run log
-                    +--> future: connection adapter and notifications
+React UI / CLI / MCP → shared task service → SQLite queue → native AI runtime →
+saved response and conversation.
 
-codex-local-scheduler dashboard
-    |
-    +--> loopback-only HTTP view and job-management UI
-```
+## Responsibilities
 
-## Boundaries
+OnCue owns scheduling, task definitions, execution supervision, retries, and retained
+history. Codex and OpenCode own model requests, provider authentication, agent tools,
+and tool execution. OnCue does not implement another model API client or agent loop.
 
-The scheduler stores a connection's name and kind so projects can reuse a
-connection without copying its credentials. Authentication belongs to the
-runner's configured credential mechanism. The first real integration will
-define this mechanism for one connection and verify it with a health check.
+`providers.py` is the single native-runtime adapter:
 
-`run-due` holds an exclusive scheduler lock while it records due occurrences.
-A unique record for each job and scheduled minute prevents duplicate execution,
-and a project lock is held while the runner works in that project's directory.
-Each active runner records its process ID, so a manual run cannot be mistaken
-for an abandoned run by an overlapping scheduler tick. Runs left active after
-their process ends are marked failed during a later tick.
+- Codex: `codex exec` with supported sandbox/model flags and final-message output.
+- OpenCode: `opencode run --format json` with a provider/model ID.
+- Models: the native OpenCode verbose catalog supplies names and zero-cost labels;
+  Codex's local catalog supplies account model identifiers.
+- Login: Codex app-server handles its supported account login protocol. OnCue only
+  exchanges control messages and exposes transient sign-in status/URLs.
 
-The data directory, SQLite database, lock directories, and run logs are owned
-by the local account. The runner starts with a small environment and passes a
-connection's name and kind only; it never stores connection credentials.
-Command jobs execute with the local account's permissions. Codex jobs record a
-sandbox and may use automatic approval only with `workspace-write`.
+These CLI interfaces already provide the model and tool behavior needed for
+scheduled work. Moving to SDK/server transports would make sense for native session
+streaming, but would add persistent provider services and transport lifecycle work.
+It would not replace OnCue's durable scheduling and history layer.
 
-`run-due --dispatch systemd` persists due occurrences, then asks a dedicated
-`codex-local-scheduler-worker@<run-id>` service to claim each one. A worker claims a
-run atomically, records its process ID, and holds only its project's lock while
-it executes. If the project is busy, the run returns to the queue for the next
-tick. The command-line default (`run-due`) dispatches queued work inline for
-local testing.
+## Queue and execution
 
-The scheduler does not yet replay occurrences missed while the computer is
-offline. That policy must be explicit because workflows differ: a report may
-run once after downtime, while a financial action should usually be skipped.
+`tasks.py` validates tasks and allocates private working folders. `schedules.py`
+converts timing controls into cron or a one-time timestamp. `scheduler.py` records
+due occurrences under a lock and starts bounded worker processes. A unique
+job/occurrence record prevents duplicate recording; workspace locks serialize work
+sharing a folder. This does not guarantee exactly-once external side effects.
 
-Codex jobs also record a model and reasoning effort. For example, use
-`gpt-5.6-terra` with `medium` for routine summaries, then reserve stronger
-models or higher effort for complex review and planning jobs. The scheduler
-passes the recorded settings to `codex exec` at run time.
+Workers atomically claim queued runs and save execution configuration snapshots.
+Cancellation/timeouts terminate the provider process group. Interrupted worker
+recovery checks PID and process-start identity. One-time tasks and deferred retries
+survive restarts; missed recurring minutes are not replayed.
 
-The dashboard is deliberately separate from the execution path. It reads and
-updates the same SQLite store in one local HTTP process. Its read surface exposes
-operational metadata such as job identity, schedule, state, runner/model, and
-recent run timing and status; it excludes commands, prompts, logs, errors, and
-credentials. Its write surface supports creating, editing, enabling/disabling,
-and archiving jobs while preserving run history. Commands and prompts are never
-returned to the browser; an edit only replaces one when a new value is supplied.
+Each attempt has separate response and diagnostic log files. Retry attempts link
+to the failed attempt and have a due time and bounded attempt count. Automatic
+retry applies only to eligible work; provider fallback requires explicit opt-in.
 
-The server rejects non-loopback bind addresses. Write requests also require a
-same-origin loopback host and a per-process CSRF token. This is suitable for
-local use only; remote access or reverse-proxy exposure still requires explicit
-authentication and a separate security design.
+## Conversations and monitors
 
-## First real workflow checklist
+The planning model returns a structured schedule proposal or a reply/clarification.
+Only validated scheduling fields reach task persistence. Planning cannot change
+models, providers, shell mode, or file permissions. Provider tools are restricted
+during planning; explicit controls can schedule without model interpretation.
 
-1. Create or choose the local project folder.
-2. Register it with `project add`.
-3. Add a connection reference if the workflow reads an external service.
-4. Put the workflow command or script in the project folder.
-5. Add a job and run it manually by choosing a schedule matching the current
-   minute.
-6. Inspect the generated log and database record before enabling the timer.
-7. Run `codex-local-scheduler doctor`, then enable the timer and inspect its first
-   scheduled result.
+Up to 12 recent messages and 16,000 context characters are included in later
+prompts. Monitor memory is bounded to 8,000 characters. These prompt limits do not
+truncate saved history. Native provider sessions are not the persistence source.
+
+Monitor results include summary, changed/completed flags, memory, and evidence.
+Completion requires structurally valid source evidence before scheduling stops.
+The model interprets evidence; OnCue does not independently establish its truth.
+Unchanged checks remain saved with notification disabled. Maximum-check limits
+pause unfinished monitors for review.
+
+## UI and interfaces
+
+`frontend/` contains React components, shared model selection, Markdown rendering,
+and appearance styles. Vite builds local static assets packaged with Python. Node
+is required to build the UI, not to run the installed app. Visible conversations
+refresh every two seconds, preserving scroll state. Output appears after completion.
+
+`dashboard.py` serves a loopback-only UI/API. Host/Origin checks and a per-process
+session token protect mutations and private reads. Output paths must resolve inside
+run storage. ZIP exports contain full output; previews read at most 256 KiB.
+
+`mcp_server.py` exposes the same task service over stdio JSON-RPC. The companion
+plugin/skill is in `integrations/oncue`. MCP schemas are enforced before dispatch,
+including nested updates; shell execution is reserved for the local UI/CLI. Coding agents do not implicitly transfer
+their account, model, or tool permissions into scheduled tasks.
+
+## Credentials, storage and distribution
+
+Credentials stay in provider-owned storage. Managed Codex login uses a separate
+CODEX_HOME under the app data directory. Settings contain non-secret preferences.
+OpenCode's tool restrictions are not an OS sandbox; Codex uses its own sandbox.
+Advanced shell tasks run with the local account's OS permissions.
+
+`Store.initialize()` adds schema without deleting history. Finished legacy runs
+are linked into conversations once. Compatibility tables, command aliases and
+storage paths are retained; see [compatibility](compatibility.md).
+
+The Linux bundle packages Python, native runtimes, static UI, licenses and agent
+integration. `service.py` starts either the source module or frozen executable.
+Startup at sign-in and sleep inhibition are optional local operating-system features.
+
+The composer keeps new-task model overrides in draft state and passes them to the
+shared message service; existing-task choices use a partial task update. Exact
+“Run now” messages bypass planning and queue saved work through `queue_manual`.
