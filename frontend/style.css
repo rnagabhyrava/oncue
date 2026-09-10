@@ -215,6 +215,225 @@ aside {
 .active-filter {
   color: var(--text) !important;
 }
+.sidebar-section {
+  margin: 0 0 20px;
+}
+.section-heading {
+  min-height: 28px;
+  padding: 0 7px 5px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.section-title,
+.section-action {
+  border: 0;
+  background: none;
+  color: var(--faint);
+  padding: 3px;
+}
+.section-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+.section-action {
+  width: 25px;
+  height: 25px;
+}
+.section-action:hover,
+.section-title:hover {
+  color: var(--text);
+}
+.project-list {
+  display: grid;
+  gap: 2px;
+}
+.project-row {
+  display: flex;
+  align-items: center;
+  border-radius: 8px;
+}
+.project-row.selected,
+.project-select.selected {
+  background: var(--selected);
+}
+.project-select {
+  min-width: 0;
+  flex: 1;
+  height: 34px;
+  padding: 0 9px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  justify-content: flex-start;
+  gap: 9px;
+  font-size: 12px;
+  font-weight: 450;
+}
+.project-select span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.project-select small {
+  color: var(--faint);
+  margin-left: auto;
+}
+.project-sidebar-icon {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 18px;
+  font-size: 15px;
+  line-height: 1;
+}
+.project-name-field {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+.project-name-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+.project-name-field input {
+  border: 0;
+  box-shadow: none !important;
+  background: transparent;
+}
+.project-identity-preview {
+  width: 42px;
+  min-height: 38px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 42px;
+  font-size: 19px;
+}
+.project-identity-picker {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--input);
+}
+.picker-label {
+  display: block;
+  margin: 1px 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.color-options,
+.emoji-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 13px;
+}
+.color-options button,
+.custom-color {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  box-shadow: 0 0 0 1px var(--line);
+  cursor: pointer;
+}
+.color-options button.chosen {
+  border-color: var(--sidebar);
+  box-shadow: 0 0 0 2px var(--text);
+}
+.custom-color {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: conic-gradient(#ef5350,#f4c84d,#58bf78,#4f94ed,#9b71e8,#ef5350);
+  color: white;
+  font-weight: 700;
+}
+.custom-color input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.emoji-options {
+  margin-bottom: 0;
+}
+.emoji-options button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 18px;
+}
+.emoji-options button:hover,
+.emoji-options button.chosen {
+  background: var(--selected);
+  border-color: var(--line);
+}
+.project-menu {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  opacity: 0;
+}
+.project-row:hover .project-menu,
+.project-menu:focus-visible {
+  opacity: 1;
+}
+.project-menu:hover {
+  color: var(--text);
+}
+.project-select.unassigned {
+  width: 100%;
+  border-radius: 8px;
+  color: var(--muted);
+}
+.inline-project-form {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 1px 4px 5px;
+  padding: 0 6px 0 9px;
+  background: var(--selected);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+}
+.inline-project-form input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+}
+.inline-project-form button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.inline-project-form button:hover {
+  color: var(--text);
+}
+.tasks-heading {
+  margin-top: 0;
+}
 nav {
   flex: 1;
   overflow: auto;
@@ -833,6 +1052,33 @@ main {
 }
 .action-menu button:hover {
   background: var(--hover);
+}
+.action-menu .danger-action {
+  color: var(--error);
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 6px 6px;
+  margin-top: 3px;
+  padding-top: 10px;
+}
+.confirm-dialog {
+  padding: 8px 25px 0;
+}
+.confirm-dialog > p {
+  color: var(--muted);
+  line-height: 1.65;
+}
+.confirm-dialog strong {
+  color: var(--text);
+}
+.danger-button {
+  color: white;
+  background: var(--error);
+  border-color: var(--error);
+}
+.danger-button:hover {
+  color: white;
+  background: color-mix(in srgb, var(--error) 84%, black);
+  border-color: transparent;
 }
 .menu-dismiss {
   position: fixed;

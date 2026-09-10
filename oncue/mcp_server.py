@@ -23,7 +23,7 @@ TOOLS=[
     {'name':'create_task','description':'Create a scheduled AI task or monitor. Use explicit user timing and stop condition. Model defaults to app settings.', 'inputSchema':{**SCHEMA,'required':['instructions','frequency']}},
     {'name':'update_task','description':'Update specified task fields, preserving omitted settings.','inputSchema':obj({'slug':{'type':'string'},'changes':SCHEMA},['slug','changes'])},
     {'name':'list_tasks','description':'List tasks, next runs and states.','inputSchema':obj({})},
-    {'name':'task_action','description':'Run now, pause, resume, or archive a task. Archiving preserves history.','inputSchema':obj({'slug':{'type':'string'},'action':{'enum':['run','pause','resume','archive']}},['slug','action'])},
+    {'name':'task_action','description':'Run now, pause, resume, archive, or permanently delete a task.','inputSchema':obj({'slug':{'type':'string'},'action':{'enum':['run','pause','resume','archive','delete']}},['slug','action'])},
     {'name':'read_history','description':'Read task conversation, responses and failures. Pass before for earlier pages.','inputSchema':obj({'slug':{'type':'string'},'before':{'type':'integer'}},['slug'])},
     {'name':'read_response','description':'Read one run response or execution log.','inputSchema':obj({'run_id':{'type':'integer'},'log':{'type':'boolean'}},['run_id'])},
     {'name':'retry_run','description':'Retry a failed run now or later. Verify repeat execution is appropriate.','inputSchema':obj({'run_id':{'type':'integer'},'minutes':{'type':'integer'}},['run_id'])},
@@ -73,8 +73,8 @@ def call(store,name,args):
     elif name=='task_action':
         action=args['action'];slug=args['slug']
         if action=='run':result={'run_id':queue_manual(store,slug)}
-        elif action in ('pause','resume','archive'):
-            ok=store.archive_job(slug) if action=='archive' else store.set_job_enabled(slug,action=='resume')
+        elif action in ('pause','resume','archive','delete'):
+            ok=store.delete_job(slug) if action=='delete' else store.archive_job(slug) if action=='archive' else store.set_job_enabled(slug,action=='resume')
             if not ok:raise ValueError('Task not found')
             result={'ok':True}
         else:raise ValueError('Unknown action')

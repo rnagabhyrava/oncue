@@ -111,9 +111,8 @@ def _execute_started_run(store: Store, job, run_id: int, data_dir: Path, schedul
     if run['config_snapshot']:
         job = json.loads(run['config_snapshot'])
     else:
-        job = current_job
-        store.connection.execute('UPDATE runs SET config_snapshot=? WHERE id=?',(json.dumps(job),run_id))
-        store.connection.commit()
+        from .attachments import snapshot_run
+        job = snapshot_run(store, current_job, run_id)
     output_dir = data_dir / 'runs' / job['slug']
     output_path = output_dir / f'{run_id}.log'
     response_path = output_dir / f'{run_id}.response.txt'
@@ -184,6 +183,9 @@ def _execute_started_run(store: Store, job, run_id: int, data_dir: Path, schedul
     store.finish_run(run_id,status,exit_code,str(output_path.resolve()),friendly)
     store.connection.execute('UPDATE runs SET error_kind=? WHERE id=?',(error_kind,run_id));store.connection.commit()
     message(store,job['id'],'assistant','',run_id)
+    from .notifications import queue_run_event, process
+    queue_run_event(store,job,run_id)
+    process(store)
     if retryable and settings['retry_enabled'] and (cfg.get('retry_safe',False) or run['kind']=='plan' or cfg.get('mode')=='monitor'):
         rid=retry_run(store,run_id,automatic=True)
         if rid and settings['allow_fallback'] and settings['fallback_provider'] and settings['fallback_model']:

@@ -2,6 +2,14 @@
 
 ## 0.3.0 — 2026-09-09
 
+- Added flat task projects, inherited project instructions, private versioned `.txt` and
+  `.md` references, and run-context snapshots for reproducible retries.
+- Added customizable project emojis and colors with consistent sidebar identity.
+- Added permanent task deletion with an explicit confirmation and managed history/file cleanup.
+- Increased light/dark theme contrast with a more vivid indigo visual system and added an OnCue browser icon.
+- Added durable outgoing webhook and Linux desktop notification delivery with bounded
+  retries, stable event IDs, private endpoint/token storage, and result/failure routing.
+
 - Added a checksum-verified single-script Linux bundle installer, application-menu
   launcher, guarded updates, and portable uninstall with opt-in data deletion.
   Documented launch, stop, sign-in startup, update, and removal commands.

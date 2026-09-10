@@ -27,7 +27,7 @@ def overview(store: Store) -> dict[str, Any]:
     for row in store.dashboard_jobs():
         state = "archived" if row["archived"] else ("enabled" if row["enabled"] else "paused")
         jobs.append({
-            "slug": row["slug"], "title": row["title"] or row["slug"], "project": row["project_slug"], "schedule": row["schedule"],
+            "slug": row["slug"], "title": row["title"] or row["slug"], "project": row["task_project_name"], "task_project_id": row["task_project_id"], "workspace_project": row["project_slug"], "schedule": row["schedule"],
             "timezone": row["timezone"], "runner": row["runner"], "model": row["model"],
             "reasoning_effort": row["reasoning_effort"], "sandbox": row["sandbox"], "auto_approve": bool(row["auto_approve"]),
             "connection": row["connection_slug"], "timeout": row["timeout_seconds"],
@@ -67,6 +67,7 @@ def task_list(store):
     heartbeat = store.connection.execute('SELECT last_tick FROM scheduler_state WHERE id=1').fetchone()
     result['scheduler_active'] = bool(heartbeat and (datetime.now(timezone.utc) - datetime.fromisoformat(heartbeat['last_tick'])).total_seconds() < 90)
     result['settings']=get_settings(store)
+    result['projects']=[dict(row) for row in store.task_projects()]
     return result
 
 
@@ -112,10 +113,10 @@ def _handler(database_path: Path):
             if not self._host_allowed():
                 self._json(403, {'error': 'Loopback host required'})
                 return
-            if self.path in ('/', '/app.js', '/app.css'):
-                name = {'/': 'index.html', '/app.js': 'app.js', '/app.css': 'app.css'}[self.path]
+            if self.path in ('/', '/app.js', '/app.css', '/favicon.svg'):
+                name = {'/': 'index.html', '/app.js': 'app.js', '/app.css': 'app.css', '/favicon.svg':'favicon.svg'}[self.path]
                 body = (STATIC / name).read_bytes().replace(b'__CSRF_TOKEN__', csrf_token.encode())
-                mime = {'/': 'text/html', '/app.js': 'text/javascript', '/app.css': 'text/css'}[self.path]
+                mime = {'/': 'text/html', '/app.js': 'text/javascript', '/app.css': 'text/css', '/favicon.svg':'image/svg+xml'}[self.path]
                 self._headers(200, mime + '; charset=utf-8', body)
                 return
             if not self._write_allowed():
@@ -127,6 +128,17 @@ def _handler(database_path: Path):
                     self._json(200, overview(store))
                 elif self.path == '/api/tasks':
                     self._json(200, task_list(store))
+                elif self.path == '/api/projects':
+                    self._json(200, {'projects':[dict(row) for row in store.task_projects()]})
+                elif self.path.startswith('/api/projects/'):
+                    project_id=int(self.path.split('/')[-1]); row=store.connection.execute('SELECT * FROM task_projects WHERE id=?',(project_id,)).fetchone()
+                    if not row: raise ValueError('Project not found')
+                    from .attachments import list_attachments
+                    tasks=[{'slug':r['slug'],'title':r['title'] or r['slug']} for r in store.connection.execute('SELECT slug,title FROM jobs WHERE task_project_id=? AND archived=0 ORDER BY title',(project_id,))]
+                    self._json(200, {'project':dict(row),'attachments':list_attachments(store,'project',project_id),'tasks':tasks})
+                elif self.path.startswith('/api/attachments/'):
+                    aid=int(self.path.split('/')[-1]); name,content=__import__('oncue.attachments',fromlist=['read']).read(store,aid)
+                    self._headers(200, 'text/plain; charset=utf-8', content)
                 elif self.path.startswith('/api/export/'):
                     from .exports import archive
                     import shutil
@@ -146,7 +158,8 @@ def _handler(database_path: Path):
                     job = store.job(slug, include_archived=True)
                     if not job:
                         raise ValueError('Task not found')
-                    self._json(200, {'instructions': job['command'], 'history': [dict(r) for r in store.history(slug, 100)]})
+                    from .attachments import list_attachments
+                    self._json(200, {'instructions': job['command'], 'history': [dict(r) for r in store.history(slug, 100)], 'attachments':list_attachments(store,'task',slug)})
                 elif self.path.startswith('/api/runs/'):
                     parts = self.path.split('/')
                     self._json(200, read_output(store, int(parts[3]), log=len(parts) == 5 and parts[4] == 'log'))
@@ -159,8 +172,8 @@ def _handler(database_path: Path):
 
         def _read_json(self):
             length = int(self.headers.get('Content-Length', '0'))
-            if not 0 <= length <= 65536:
-                raise ValueError('Request must be at most 64 KiB')
+            if not 0 <= length <= 131072:
+                raise ValueError('Request must be at most 128 KiB')
             value = json.loads(self.rfile.read(length) or b'{}')
             if not isinstance(value, dict):
                 raise ValueError('Expected a JSON object')
@@ -170,6 +183,9 @@ def _handler(database_path: Path):
             self._mutate()
 
         def do_PATCH(self):
+            self._mutate()
+
+        def do_DELETE(self):
             self._mutate()
 
         def _mutate(self):
@@ -183,6 +199,21 @@ def _handler(database_path: Path):
                 parts = self.path.split('/')
                 if self.path == '/api/settings':
                     self._json(200,update_settings(store,data));return
+                if self.path == '/api/projects' and self.command == 'POST':
+                    self._json(201,{'id':store.create_task_project(data.get('name',''),data.get('instructions',''),data.get('icon',''),data.get('color',''))});return
+                if len(parts)==4 and parts[1:3]==['api','projects']:
+                    project_id=int(parts[3])
+                    if self.command=='PATCH': store.update_task_project(project_id,data.get('name'),data.get('instructions'),data.get('icon'),data.get('color'));self._json(200,{'ok':True});return
+                    if self.command=='DELETE': store.delete_task_project(project_id);self._json(200,{'ok':True});return
+                if self.path == '/api/attachments' and self.command == 'POST':
+                    from .attachments import upload
+                    self._json(201,{'id':upload(store,data.get('owner_type'),data.get('owner'),data.get('name'),data.get('content'))});return
+                if len(parts)==4 and parts[1:3]==['api','attachments'] and self.command=='DELETE':
+                    from .attachments import remove
+                    remove(store,int(parts[3]));self._json(200,{'ok':True});return
+                if self.path == '/api/notifications/process':
+                    from .notifications import process
+                    process(store);self._json(200,{'ok':True});return
                 if self.path == '/api/startup':
                     from .service import install_startup
                     self._json(200,{'launcher':install_startup(store.path.parent)});return
@@ -211,6 +242,10 @@ def _handler(database_path: Path):
                     return
                 if len(parts) == 4 and parts[1:3] == ['api', 'tasks'] and self.command == 'PATCH':
                     self._json(200, {'slug': save_task(store, data, parts[3])})
+                    return
+                if len(parts) == 4 and parts[1:3] == ['api', 'tasks'] and self.command == 'DELETE':
+                    if not store.delete_job(parts[3]): raise ValueError('Task not found')
+                    self._json(200, {'ok': True})
                     return
                 if len(parts) == 5 and parts[1:3] == ['api', 'tasks'] and self.command == 'POST':
                     slug, action = parts[3:]

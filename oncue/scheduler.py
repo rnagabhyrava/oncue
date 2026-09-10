@@ -68,6 +68,8 @@ class LocalScheduler:
                         self.inhibitor.terminate();self.inhibitor.wait(timeout=5)
                     self.inhibitor=None
                 ids = enqueue_due(store)
+                from .notifications import process as process_notifications
+                process_notifications(store)
                 for run_id in ids:
                     from .settings import get_settings
                     if len(self.workers) >= get_settings(store)['max_workers']:

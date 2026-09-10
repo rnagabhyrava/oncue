@@ -49,7 +49,9 @@ export default function TaskPanel({
     [busy, setBusy] = useState(false),
     [loading, setLoading] = useState(!!task),
     [next, setNext] = useState(""),
-    [providers, setProviders] = useState([]);
+    [providers, setProviders] = useState([]),
+    [projects, setProjects] = useState([]),
+    [attachments, setAttachments] = useState([]);
   const set = (key, value) => setValues((v) => ({ ...v, [key]: value }));
   useEffect(() => {
     let alive = true;
@@ -65,6 +67,8 @@ export default function TaskPanel({
     request("/api/settings")
       .then((d) => alive && setProviders(d.providers))
       .catch(() => {});
+    request("/api/projects").then((d) => alive && setProjects(d.projects)).catch(() => {});
+    if (task) request("/api/tasks/" + task.slug).then((d) => alive && setAttachments(d.attachments || [])).catch(() => {});
     return () => {
       alive = false;
     };
@@ -122,6 +126,13 @@ export default function TaskPanel({
       setBusy(false);
     }
   }
+  async function addFile(file) {
+    if (!file) return;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = ""; bytes.forEach((b) => binary += String.fromCharCode(b));
+    const result = await request("/api/attachments", "POST", {owner_type:"task",owner:task.slug,name:file.name,content:btoa(binary)});
+    setAttachments((items) => [...items, {id:result.id,name:file.name,size:file.size}]);
+  }
   return (
     <Modal title={task ? "Task details" : "Schedule a task"} onClose={onClose}>
       <form onSubmit={submit} noValidate>
@@ -145,6 +156,16 @@ export default function TaskPanel({
               onChange={(e) => set("title", e.target.value)}
             />
           </Field>
+          <Field label="Project">
+            <select value={values.task_project_id || ""} onChange={(e) => set("task_project_id", e.target.value ? Number(e.target.value) : null)}>
+              <option value="">Unassigned</option>
+              {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+            </select>
+          </Field>
+          {task && <Field label="Reference files" hint="UTF-8 .txt or .md, up to 64 KiB each.">
+            <input type="file" accept=".txt,.md,text/plain,text/markdown" onChange={(e) => addFile(e.target.files[0]).catch((error) => setError(error.message))} />
+            {attachments.map((file) => <small key={file.id}>{file.name} </small>)}
+          </Field>}
           <div className="field-grid">
             <Field label="Repeat">
               <select

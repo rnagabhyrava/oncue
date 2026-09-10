@@ -41,4 +41,4 @@ packages = ["oncue"]
 include-package-data = false
 
 [tool.setuptools.package-data]
-oncue = ["static/*.html", "static/*.css", "static/*.js"]
+oncue = ["static/*.html", "static/*.css", "static/*.js", "static/*.svg"]
