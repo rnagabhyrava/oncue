@@ -61,7 +61,7 @@ def parser() -> argparse.ArgumentParser:
     task_edit.add_argument("--frequency", choices=("once", "daily", "weekdays", "weekly", "custom"), default=argparse.SUPPRESS)
     task_edit.add_argument("--weekday", type=int, default=argparse.SUPPRESS)
     task.add_parser("list")
-    for action in ("run", "pause", "resume", "archive", "history"):
+    for action in ("run", "pause", "resume", "archive", "delete", "history"):
         task.add_parser(action).add_argument("slug")
     task_output = task.add_parser("response")
     task_output.add_argument("run_id", type=int)
@@ -143,7 +143,7 @@ def main() -> int:
                 print(result)
                 return 0 if result == "succeeded" else 1
             else:
-                ok = store.archive_job(args.slug) if args.task_action == "archive" else store.set_job_enabled(args.slug, args.task_action == "resume")
+                ok = store.delete_job(args.slug) if args.task_action == "delete" else store.archive_job(args.slug) if args.task_action == "archive" else store.set_job_enabled(args.slug, args.task_action == "resume")
                 if not ok:
                     raise ValueError("Task not found")
                 print("Updated task")

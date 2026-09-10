@@ -57,6 +57,17 @@ The model interprets evidence; OnCue does not independently establish its truth.
 Unchanged checks remain saved with notification disabled. Maximum-check limits
 pause unfinished monitors for review.
 
+## Organization and notifications
+
+User-facing flat projects are separate from execution projects. They own optional shared
+instructions and uploaded text/Markdown references, while execution projects still own
+workspaces and locks. The first attempt snapshots inherited reference text in its run
+configuration; retries reuse that snapshot.
+
+Final run outcomes create durable notification events and delivery attempts. Webhook URLs
+and bearer tokens live in a private file outside SQLite, while event delivery status stays
+inspectable in SQLite. Failed deliveries retry at 1, 5, and 30 minutes and cannot rerun AI work.
+
 ## UI and interfaces
 
 `frontend/` contains React components, shared model selection, Markdown rendering,

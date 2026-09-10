@@ -168,6 +168,27 @@ Type what should happen and when. OnCue asks when important details are missing.
 Use the **+** button or **Task details** for explicit timing and execution controls.
 Each task gets a working folder automatically.
 
+## Organize work and add references
+
+Create flat projects from the task sidebar to group tasks. Projects are organizational:
+they do not change a task's working folder, lock, model, or schedule. A task can remain
+**Unassigned**, and deleting a project returns its tasks there while retaining history.
+
+Projects can contain shared instructions and text reference files. Open **Task details**
+to choose a project and attach task-specific references. OnCue accepts UTF-8 `.txt` and
+`.md` copies up to 64 KiB each; active project/task material may total 128 KiB. Each run
+saves the referenced text in its execution snapshot, so later edits do not change it.
+
+## Background notifications
+
+Settings can send result and terminal-failure notifications through Linux desktop alerts
+or outgoing webhooks. Webhooks receive a versioned JSON event with a stable event ID,
+task/run identity, status, complete response, and error details. Delivery retries do not
+rerun the task. Add a webhook as JSON in Settings; for example
+`{"name":"Automation","url":"https://example.test/oncue"}`. HTTP is allowed only
+when that destination explicitly sets `"allow_local":true`. Bearer tokens may be passed
+as `"token"`; webhook URLs and tokens live outside SQLite and exports.
+
 The task sidebar opens its conversation. Ask follow-ups there, change the schedule,
 or use its menu to run, pause, resume, archive, and export. Earlier messages remain
 available. Export includes all messages and complete response/log files; on-screen

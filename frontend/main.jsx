@@ -2,6 +2,7 @@ import { IconButton, ErrorNotice, Modal } from "./components";
 import ComposerModelPicker from "./ComposerModelPicker";
 import SettingsPanel from "./SettingsPanel";
 import TaskPanel from "./TaskPanel";
+import ProjectPanel from "./ProjectPanel";
 import RunMessage from "./RunMessage";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -28,11 +29,14 @@ import {
   SlidersHorizontal,
   Eye,
   Square,
+  Folder,
+  X,
+  Trash2,
 } from "lucide-react";
 import { request, exportHistory, formatDate, scheduleLabel } from "./api";
 import "./style.css";
 
-const empty = { jobs: [], runs: [], settings: {}, scheduler_active: false };
+const empty = { jobs: [], runs: [], projects: [], settings: {}, scheduler_active: false };
 const stateNames = {
   enabled: "Scheduled",
   paused: "Paused",
@@ -66,6 +70,11 @@ function App() {
     [settingsOpen, setSettingsOpen] = useState(false),
     [draftModel, setDraftModel] = useState(null),
     [editor, setEditor] = useState(false),
+    [projectEditor, setProjectEditor] = useState(null),
+    [projectCreating, setProjectCreating] = useState(false),
+    [projectName, setProjectName] = useState(""),
+    [projectFilter, setProjectFilter] = useState("all"),
+    [deleteTarget, setDeleteTarget] = useState(null),
     [messages, setMessages] = useState([]),
     [active, setActive] = useState([]),
     [before, setBefore] = useState(null),
@@ -106,7 +115,7 @@ function App() {
       );
       if (
         knownRuns.current &&
-        result.settings.notifications &&
+        result.settings.notifications && !result.settings.desktop_notifications &&
         "Notification" in window &&
         Notification.permission === "granted"
       )
@@ -251,8 +260,19 @@ function App() {
   const filtered = data.jobs.filter(
     (j) =>
       (archived ? j.state === "archived" : j.state !== "archived") &&
+      (projectFilter === "all" || (projectFilter === "unassigned" ? !j.task_project_id : j.task_project_id === projectFilter)) &&
       j.title.toLowerCase().includes(query.toLowerCase()),
-  );
+  ).sort((a,b) => a.title.localeCompare(b.title));
+  async function createProject(e) {
+    e.preventDefault();
+    const name = projectName.trim();
+    if (!name) return;
+    try {
+      const result = await request("/api/projects", "POST", { name });
+      setProjectName(""); setProjectCreating(false); setProjectFilter(result.id);
+      await refresh();
+    } catch (e) { setError(e.message); }
+  }
   const disabled =
     sending ||
     active.some((r) => r.kind === "plan") ||
@@ -354,13 +374,31 @@ function App() {
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
-        <div className="list-heading">
-          <span>{archived ? "Archived" : "Your tasks"}</span>
+        {!archived && <section className="sidebar-section projects-section">
+          <div className="section-heading">
+            <button className="section-title" onClick={() => setProjectFilter("all")}>Projects</button>
+            <button className="section-action" aria-label="New project" title="New project" onClick={() => setProjectCreating(true)}><Plus size={15}/></button>
+          </div>
+          {projectCreating && <form className="inline-project-form" onSubmit={createProject}>
+            <Folder size={15}/><input autoFocus aria-label="Project name" placeholder="Project name" value={projectName} onChange={(e) => setProjectName(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") { setProjectCreating(false); setProjectName(""); } }}/>
+            <button type="submit" aria-label="Create project" disabled={!projectName.trim()}><Check size={14}/></button>
+            <button type="button" aria-label="Cancel" onClick={() => { setProjectCreating(false); setProjectName(""); }}><X size={14}/></button>
+          </form>}
+          <div className="project-list">
+            {data.projects.map((project) => <div className={`project-row ${projectFilter === project.id ? "selected" : ""}`} key={project.id}>
+              <button className="project-select" onClick={() => setProjectFilter(project.id)}><span className="project-sidebar-icon" style={{color:project.color || undefined}}>{project.icon || <Folder size={15}/>}</span><span>{project.name}</span><small>{project.task_count}</small></button>
+              <button className="project-menu" aria-label={`Edit ${project.name}`} onClick={() => setProjectEditor(project)}><MoreHorizontal size={15}/></button>
+            </div>)}
+            <button className={`project-select unassigned ${projectFilter === "unassigned" ? "selected" : ""}`} onClick={() => setProjectFilter("unassigned")}><Folder size={15}/><span>Unassigned</span></button>
+          </div>
+        </section>}
+        <div className="section-heading tasks-heading">
+          <button className="section-title" onClick={() => setProjectFilter("all")}>{archived ? "Archived" : projectFilter === "all" ? "Tasks" : data.projects.find((p) => p.id === projectFilter)?.name || "Unassigned"}</button>
           <button
             className={archived ? "active-filter" : ""}
             aria-label={archived ? "Show current tasks" : "Show archived tasks"}
             title={archived ? "Show current tasks" : "Show archived tasks"}
-            onClick={() => setArchived(!archived)}
+            onClick={() => { setArchived(!archived); setProjectFilter("all"); }}
           >
             <Archive size={13} />
           </button>
@@ -530,6 +568,13 @@ function App() {
                             Archive task
                           </button>
                         )}
+                        <button
+                          className="danger-action"
+                          onClick={() => { setMenu(false); setDeleteTarget(task); }}
+                        >
+                          <Trash2 size={14} />
+                          Delete task
+                        </button>
                       </div>
                     </>
                   )}
@@ -754,6 +799,19 @@ function App() {
           }}
         />
       )}
+      {projectEditor && <ProjectPanel project={projectEditor} onClose={() => setProjectEditor(null)} onSaved={refresh} />}
+      {deleteTarget && <Modal title="Delete task?" onClose={() => setDeleteTarget(null)}>
+        <div className="confirm-dialog">
+          <p><strong>{deleteTarget.title}</strong> and its conversation, run history, outputs, and task files will be permanently deleted.</p>
+          <div className="modal-footer">
+            <button type="button" className="quiet" onClick={() => setDeleteTarget(null)}>Cancel</button>
+            <button type="button" className="danger-button" onClick={() => action(async () => {
+              await request(`/api/tasks/${deleteTarget.slug}`, "DELETE", {});
+              setDeleteTarget(null); select(null);
+            })}>Delete permanently</button>
+          </div>
+        </div>
+      </Modal>}
       {log && (
         <Modal title="Execution log" onClose={closeLog} wide>
           <div className="log-body">

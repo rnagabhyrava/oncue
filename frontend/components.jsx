@@ -37,9 +37,6 @@ export function Modal({ title, children, onClose, wide = false }) {
       ref={ref}
       aria-label={title}
       className={wide ? "modal wide" : "modal"}
-      onClick={(e) => {
-        if (e.target === ref.current) onClose();
-      }}
     >
       <div className="modal-heading">
         <h2>{title}</h2>

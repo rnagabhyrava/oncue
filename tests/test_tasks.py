@@ -21,6 +21,7 @@ from oncue.scheduler import enqueue_due, LocalScheduler
 from oncue.schedules import from_form, next_run
 from oncue.store import Store
 from oncue.tasks import save_task, queue_manual, read_output
+from oncue.attachments import upload, list_attachments
 
 
 class TaskTests(unittest.TestCase):
@@ -49,6 +50,42 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(read_output(self.store, ids[0])['text'], 'task-response')
         self.assertEqual(enqueue_due(self.store, now), [])
         self.assertEqual(len(self.store.history(slug)), 1)
+
+    def test_organizational_project_attachments_and_snapshot(self):
+        project=self.store.create_task_project('Research','Use concise source notes.')
+        self.store.update_task_project(project,icon='🚀',color='#4F94ED')
+        identity=self.store.connection.execute('SELECT icon,color FROM task_projects WHERE id=?',(project,)).fetchone()
+        self.assertEqual((identity['icon'],identity['color']),('🚀','#4f94ed'))
+        with self.assertRaisesRegex(ValueError,'hex color'):
+            self.store.update_task_project(project,color='blue')
+        slug=self.task(task_project_id=project)
+        import base64
+        upload(self.store,'project',project,'brief.md',base64.b64encode(b'# Brief\nUse current sources.').decode())
+        upload(self.store,'task',slug,'notes.txt',base64.b64encode(b'Only compare public plans.').decode())
+        self.assertEqual([x['name'] for x in list_attachments(self.store,'task',slug)],['notes.txt'])
+        rid=queue_manual(self.store,slug)
+        from oncue.attachments import snapshot_run
+        snapshot=snapshot_run(self.store,dict(self.store.job(slug)),rid)
+        self.assertIn('Use concise source notes.',snapshot['_reference_context'])
+        self.assertIn('Only compare public plans.',snapshot['_reference_context'])
+        self.store.delete_task_project(project)
+        self.assertIsNone(self.store.job(slug)['task_project_id'])
+        self.assertIn('Use concise source notes.',snapshot['_reference_context'])
+
+    def test_permanent_task_delete_removes_history_and_managed_files(self):
+        import base64
+        slug=self.task()
+        upload(self.store,'task',slug,'private.txt',base64.b64encode(b'reference').decode())
+        job=dict(self.store.job(slug));workspace=Path(job['project_path'])
+        rid=queue_manual(self.store,slug)
+        self.assertEqual(run_queued_job(self.store,rid,self.store.path.parent),'succeeded')
+        response=Path(self.store.history(slug)[0]['output_path'])
+        self.assertTrue(response.exists())
+        self.assertTrue(self.store.delete_job(slug))
+        self.assertIsNone(self.store.job(slug,include_archived=True))
+        self.assertFalse(response.exists())
+        self.assertFalse(workspace.exists())
+        self.assertFalse(self.store.delete_job(slug))
 
     def test_once_late_start_manual_run_and_history_preserving_edit(self):
         scheduled = datetime.now(timezone.utc).replace(second=0, microsecond=0) + timedelta(days=1)

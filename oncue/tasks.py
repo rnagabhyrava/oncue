@@ -76,6 +76,8 @@ def save_task(store, data: dict, slug: str | None = None) -> str:
             raise ValueError('Changing task type requires new instructions')
         store.update_job(slug, schedule, timeout, runner, model, effort, zone, sandbox, auto,
                          existing['connection_slug'], enabled, instructions, commit=False)
+        if 'task_project_id' in data:
+            store.set_task_project(slug, data['task_project_id'])
     else:
         base = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')[:40] or 'task'
         slug = f'{base}-{uuid.uuid4().hex[:8]}'
@@ -87,6 +89,8 @@ def save_task(store, data: dict, slug: str | None = None) -> str:
             store.add_project(project, workspace)
         store.add_job(slug, project, schedule, instructions, None, timeout, runner, model,
                       effort, zone, sandbox, auto, enabled=enabled, commit=False)
+        if data.get('task_project_id') is not None:
+            store.set_task_project(slug, data['task_project_id'])
     store.connection.execute('UPDATE jobs SET title = ?, provider=?, task_config=?, completed_at=NULL WHERE slug = ?', (title, provider, json.dumps(cfg), slug))
     store.connection.commit()
     return slug

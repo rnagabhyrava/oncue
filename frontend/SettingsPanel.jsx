@@ -169,6 +169,17 @@ export default function SettingsPanel({ onClose, onSaved, initial }) {
                 checked={values.notifications}
                 onChange={(v) => set("notifications", v)}
               />
+              <Toggle
+                label="Native desktop notifications"
+                hint="Delivered by Linux even when this browser tab is closed."
+                checked={values.desktop_notifications || false}
+                onChange={(v) => set("desktop_notifications", v)}
+              />
+              <Field label="Outgoing webhooks" hint="One JSON destination per line: {&quot;name&quot;:&quot;My endpoint&quot;,&quot;url&quot;:&quot;https://…&quot;}. Complete results are sent.">
+                <textarea rows="3" value={(values.webhooks || []).map((item) => JSON.stringify(item)).join("\n")} onChange={(e) => {
+                  try { set("webhooks", e.target.value.trim() ? e.target.value.split("\n").map(JSON.parse) : []); } catch (_) { set("webhooks", []); }
+                }} />
+              </Field>
               <button
                 className="text-action"
                 type="button"

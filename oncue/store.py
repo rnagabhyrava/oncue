@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -122,10 +124,75 @@ class Store:
                 if definition.split()[0] not in columns:
                     self.connection.execute(f'ALTER TABLE {table} ADD COLUMN {definition}')
         self.connection.execute("CREATE INDEX IF NOT EXISTS runs_queue ON runs(status,retry_at)")
+        # User-facing folders deliberately do not reuse execution projects: the latter
+        # own workspaces and locks and must remain stable for existing tasks.
+        self.connection.execute("""CREATE TABLE IF NOT EXISTS task_projects (
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, instructions TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+        project_columns={r['name'] for r in self.connection.execute('PRAGMA table_info(task_projects)')}
+        if 'icon' not in project_columns: self.connection.execute("ALTER TABLE task_projects ADD COLUMN icon TEXT NOT NULL DEFAULT ''")
+        if 'color' not in project_columns: self.connection.execute("ALTER TABLE task_projects ADD COLUMN color TEXT NOT NULL DEFAULT ''")
+        job_columns = {r['name'] for r in self.connection.execute('PRAGMA table_info(jobs)')}
+        if 'task_project_id' not in job_columns:
+            self.connection.execute('ALTER TABLE jobs ADD COLUMN task_project_id INTEGER REFERENCES task_projects(id)')
+        self.connection.execute("""CREATE TABLE IF NOT EXISTS attachments (
+            id INTEGER PRIMARY KEY, owner_type TEXT NOT NULL CHECK(owner_type IN ('project','task')),
+            owner_id INTEGER NOT NULL, name TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+            path TEXT NOT NULL, size INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            replaced_by INTEGER REFERENCES attachments(id), deleted_at TEXT)""")
+        self.connection.execute('CREATE INDEX IF NOT EXISTS attachments_owner ON attachments(owner_type,owner_id,deleted_at)')
+        self.connection.execute("""CREATE TABLE IF NOT EXISTS notification_events (
+            id TEXT PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES runs(id), event TEXT NOT NULL,
+            payload TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+        self.connection.execute("""CREATE TABLE IF NOT EXISTS notification_deliveries (
+            id INTEGER PRIMARY KEY, event_id TEXT NOT NULL REFERENCES notification_events(id), destination TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('webhook','desktop')), status TEXT NOT NULL DEFAULT 'queued',
+            attempt INTEGER NOT NULL DEFAULT 0, retry_at TEXT, error TEXT, delivered_at TEXT,
+            UNIQUE(event_id,destination))""")
+        self.connection.execute('CREATE INDEX IF NOT EXISTS notification_queue ON notification_deliveries(status,retry_at)')
         self.connection.execute("""INSERT OR IGNORE INTO messages(job_id,role,run_id,created_at)
             SELECT job_id,'assistant',id,COALESCE(finished_at,started_at) FROM runs
             WHERE status IN ('succeeded','failed','timed_out')""")
         self.connection.commit()
+
+    def task_projects(self):
+        return self.connection.execute("""SELECT task_projects.*, COUNT(jobs.id) AS task_count
+            FROM task_projects LEFT JOIN jobs ON jobs.task_project_id=task_projects.id AND jobs.archived=0
+            GROUP BY task_projects.id ORDER BY name COLLATE NOCASE""").fetchall()
+
+    def create_task_project(self, name: str, instructions: str = '', icon: str = '', color: str = ''):
+        name = str(name).strip()
+        if not name or len(name) > 120: raise ValueError('Project name must be 1 to 120 characters')
+        if len(instructions) > 16000: raise ValueError('Project instructions must be at most 16,000 characters')
+        icon,color=self._project_identity(icon,color)
+        cur=self.connection.execute('INSERT INTO task_projects(name,instructions,icon,color) VALUES (?,?,?,?)',(name,instructions,icon,color));self.connection.commit();return cur.lastrowid
+
+    @staticmethod
+    def _project_identity(icon, color):
+        icon=str(icon or '').strip()
+        color=str(color or '').strip().lower()
+        if len(icon)>8: raise ValueError('Project emoji is too long')
+        if color and not re.fullmatch(r'#[0-9a-f]{6}',color): raise ValueError('Project color must be a hex color')
+        return icon,color
+
+    def update_task_project(self, project_id: int, name=None, instructions=None, icon=None, color=None):
+        row=self.connection.execute('SELECT * FROM task_projects WHERE id=?',(project_id,)).fetchone()
+        if not row: raise ValueError('Project not found')
+        name=row['name'] if name is None else str(name).strip(); instructions=row['instructions'] if instructions is None else str(instructions)
+        icon,color=self._project_identity(row['icon'] if icon is None else icon,row['color'] if color is None else color)
+        if not name or len(name)>120 or len(instructions)>16000: raise ValueError('Invalid project details')
+        self.connection.execute('UPDATE task_projects SET name=?,instructions=?,icon=?,color=? WHERE id=?',(name,instructions,icon,color,project_id));self.connection.commit()
+
+    def delete_task_project(self, project_id: int):
+        self.connection.execute('UPDATE jobs SET task_project_id=NULL WHERE task_project_id=?',(project_id,))
+        self.connection.execute("UPDATE attachments SET deleted_at=CURRENT_TIMESTAMP WHERE owner_type='project' AND owner_id=? AND deleted_at IS NULL",(project_id,))
+        cur=self.connection.execute('DELETE FROM task_projects WHERE id=?',(project_id,));self.connection.commit()
+        if not cur.rowcount: raise ValueError('Project not found')
+
+    def set_task_project(self, slug: str, project_id):
+        if project_id is not None and not self.connection.execute('SELECT 1 FROM task_projects WHERE id=?',(project_id,)).fetchone(): raise ValueError('Project not found')
+        cur=self.connection.execute('UPDATE jobs SET task_project_id=? WHERE slug=?',(project_id,slug));self.connection.commit()
+        if not cur.rowcount: raise ValueError('Task not found')
 
     def _migrate_runs_for_queue(self) -> None:
         """Upgrade the immutable run-status constraint without losing history."""
@@ -274,11 +341,12 @@ class Store:
     def dashboard_jobs(self):
         """Operational job data safe to present in the local dashboard."""
         return self.connection.execute(
-            """SELECT jobs.slug, jobs.title, projects.slug AS project_slug, jobs.schedule, jobs.enabled, jobs.archived,
+            """SELECT jobs.slug, jobs.title, projects.slug AS project_slug, task_projects.name AS task_project_name, jobs.task_project_id, jobs.schedule, jobs.enabled, jobs.archived,
                       jobs.runner, jobs.model, jobs.reasoning_effort, jobs.timezone, jobs.sandbox, jobs.auto_approve,
                       jobs.timeout_seconds, connections.slug AS connection_slug,
                       runs.status AS last_status, runs.finished_at AS last_finished_at
                FROM jobs JOIN projects ON projects.id = jobs.project_id
+               LEFT JOIN task_projects ON task_projects.id = jobs.task_project_id
                LEFT JOIN connections ON connections.id = jobs.connection_id
                LEFT JOIN runs ON runs.id = (SELECT id FROM runs WHERE job_id = jobs.id ORDER BY id DESC LIMIT 1)
                ORDER BY jobs.archived, jobs.slug"""
@@ -297,9 +365,10 @@ class Store:
     def job(self, slug: str, include_archived: bool = False):
         archived_filter = "" if include_archived else "AND jobs.archived = 0"
         return self.connection.execute(
-            """SELECT jobs.*, projects.slug AS project_slug, projects.path AS project_path,
+            """SELECT jobs.*, projects.slug AS project_slug, projects.path AS project_path, task_projects.name AS task_project_name,
                       connections.slug AS connection_slug, connections.kind AS connection_kind
                FROM jobs JOIN projects ON projects.id = jobs.project_id
+               LEFT JOIN task_projects ON task_projects.id = jobs.task_project_id
                LEFT JOIN connections ON connections.id = jobs.connection_id
                WHERE jobs.slug = ? """ + archived_filter,
             (slug,),
@@ -323,6 +392,39 @@ class Store:
             self._skip_queued_runs(slug, "job archived before execution")
         self.connection.commit()
         return cursor.rowcount == 1
+
+    def delete_job(self, slug: str) -> bool:
+        """Permanently remove one task and its retained files after explicit UI/CLI action."""
+        job = self.job(slug, include_archived=True)
+        if not job:
+            return False
+        run_ids = [row['id'] for row in self.connection.execute('SELECT id FROM runs WHERE job_id=?',(job['id'],))]
+        attachment_paths = [row['path'] for row in self.connection.execute("SELECT path FROM attachments WHERE owner_type='task' AND owner_id=?",(job['id'],))]
+        with self.connection:
+            if run_ids:
+                marks=','.join('?' for _ in run_ids)
+                event_ids=[row['id'] for row in self.connection.execute(f'SELECT id FROM notification_events WHERE run_id IN ({marks})',run_ids)]
+                if event_ids:
+                    event_marks=','.join('?' for _ in event_ids)
+                    self.connection.execute(f'DELETE FROM notification_deliveries WHERE event_id IN ({event_marks})',event_ids)
+                    self.connection.execute(f'DELETE FROM notification_events WHERE id IN ({event_marks})',event_ids)
+            self.connection.execute('DELETE FROM messages WHERE job_id=?',(job['id'],))
+            self.connection.execute('DELETE FROM runs WHERE job_id=?',(job['id'],))
+            self.connection.execute("DELETE FROM attachments WHERE owner_type='task' AND owner_id=?",(job['id'],))
+            self.connection.execute('DELETE FROM jobs WHERE id=?',(job['id'],))
+            remaining=self.connection.execute('SELECT 1 FROM jobs WHERE project_id=?',(job['project_id'],)).fetchone()
+            if not remaining: self.connection.execute('DELETE FROM projects WHERE id=?',(job['project_id'],))
+        attachments_root=(self.path.parent/'attachments').resolve()
+        for raw in attachment_paths:
+            path=Path(raw).resolve()
+            if path.is_relative_to(attachments_root):
+                try:path.unlink()
+                except FileNotFoundError:pass
+        for root in (self.path.parent/'runs'/slug, Path(job['project_path'])):
+            managed=(self.path.parent/('runs' if root.name==slug and root.parent.name=='runs' else 'workspaces')).resolve()
+            resolved=root.resolve()
+            if resolved.is_relative_to(managed) and resolved.is_dir(): shutil.rmtree(resolved)
+        return True
 
     def _skip_queued_runs(self, slug: str, reason: str) -> None:
         """Close unclaimed work when a job is paused or archived."""
@@ -426,11 +528,12 @@ class Store:
 
     def run_job(self, run_id: int):
         return self.connection.execute(
-            """SELECT jobs.*, projects.slug AS project_slug, projects.path AS project_path,
+            """SELECT jobs.*, projects.slug AS project_slug, projects.path AS project_path, task_projects.name AS task_project_name,
                       connections.slug AS connection_slug, connections.kind AS connection_kind,
                       runs.scheduled_for AS run_scheduled_for
                FROM runs JOIN jobs ON jobs.id = runs.job_id
                JOIN projects ON projects.id = jobs.project_id
+               LEFT JOIN task_projects ON task_projects.id = jobs.task_project_id
                LEFT JOIN connections ON connections.id = jobs.connection_id
                WHERE runs.id = ?""",
             (run_id,),
