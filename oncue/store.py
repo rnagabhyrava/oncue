@@ -135,6 +135,11 @@ class Store:
         job_columns = {r['name'] for r in self.connection.execute('PRAGMA table_info(jobs)')}
         if 'task_project_id' not in job_columns:
             self.connection.execute('ALTER TABLE jobs ADD COLUMN task_project_id INTEGER REFERENCES task_projects(id)')
+        if 'remote_revision' not in job_columns:
+            self.connection.execute('ALTER TABLE jobs ADD COLUMN remote_revision INTEGER NOT NULL DEFAULT 0')
+        self.connection.execute("""CREATE TABLE IF NOT EXISTS remote_commands (
+            id TEXT PRIMARY KEY, status TEXT NOT NULL CHECK(status IN ('applied','rejected')),
+            result TEXT NOT NULL DEFAULT '{}', applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
         self.connection.execute("""CREATE TABLE IF NOT EXISTS attachments (
             id INTEGER PRIMARY KEY, owner_type TEXT NOT NULL CHECK(owner_type IN ('project','task')),
             owner_id INTEGER NOT NULL, name TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
@@ -189,9 +194,10 @@ class Store:
         cur=self.connection.execute('DELETE FROM task_projects WHERE id=?',(project_id,));self.connection.commit()
         if not cur.rowcount: raise ValueError('Project not found')
 
-    def set_task_project(self, slug: str, project_id):
+    def set_task_project(self, slug: str, project_id, *, commit: bool = True):
         if project_id is not None and not self.connection.execute('SELECT 1 FROM task_projects WHERE id=?',(project_id,)).fetchone(): raise ValueError('Project not found')
-        cur=self.connection.execute('UPDATE jobs SET task_project_id=? WHERE slug=?',(project_id,slug));self.connection.commit()
+        cur=self.connection.execute('UPDATE jobs SET task_project_id=? WHERE slug=?',(project_id,slug))
+        if commit: self.connection.commit()
         if not cur.rowcount: raise ValueError('Task not found')
 
     def _migrate_runs_for_queue(self) -> None:
@@ -219,12 +225,13 @@ class Store:
             """
         )
 
-    def add_project(self, slug: str, path: Path) -> None:
+    def add_project(self, slug: str, path: Path, *, commit: bool = True) -> None:
         validate_slug(slug, "project slug")
         if not path.is_dir():
             raise ValueError(f"project directory does not exist: {path}")
         self.connection.execute("INSERT INTO projects(slug, path) VALUES (?, ?)", (slug, str(path.resolve())))
-        self.connection.commit()
+        if commit:
+            self.connection.commit()
 
     def add_connection(self, slug: str, kind: str) -> None:
         validate_slug(slug, "connection slug")
@@ -302,7 +309,7 @@ class Store:
         fields = [
             "schedule = ?", "timeout_seconds = ?", "runner = ?", "model = ?",
             "reasoning_effort = ?", "timezone = ?", "sandbox = ?", "auto_approve = ?",
-            "connection_id = ?", "enabled = ?",
+            "connection_id = ?", "enabled = ?", "remote_revision = remote_revision + 1",
         ]
         values: list[object] = [schedule, timeout, runner, model, reasoning_effort, timezone,
                                 sandbox, int(auto_approve), connection_id, int(enabled)]
@@ -341,7 +348,7 @@ class Store:
     def dashboard_jobs(self):
         """Operational job data safe to present in the local dashboard."""
         return self.connection.execute(
-            """SELECT jobs.slug, jobs.title, projects.slug AS project_slug, task_projects.name AS task_project_name, jobs.task_project_id, jobs.schedule, jobs.enabled, jobs.archived,
+            """SELECT jobs.slug, jobs.title, jobs.remote_revision, projects.slug AS project_slug, task_projects.name AS task_project_name, jobs.task_project_id, jobs.schedule, jobs.enabled, jobs.archived,
                       jobs.runner, jobs.model, jobs.reasoning_effort, jobs.timezone, jobs.sandbox, jobs.auto_approve,
                       jobs.timeout_seconds, connections.slug AS connection_slug,
                       runs.status AS last_status, runs.finished_at AS last_finished_at
@@ -374,23 +381,23 @@ class Store:
             (slug,),
         ).fetchone()
 
-    def set_job_enabled(self, slug: str, enabled: bool) -> bool:
+    def set_job_enabled(self, slug: str, enabled: bool, *, commit: bool = True) -> bool:
         cursor = self.connection.execute(
-            "UPDATE jobs SET enabled = ? WHERE slug = ? AND archived = 0", (int(enabled), slug)
+            "UPDATE jobs SET enabled = ?, remote_revision = remote_revision + 1 WHERE slug = ? AND archived = 0", (int(enabled), slug)
         )
         if cursor.rowcount == 1 and not enabled:
             self._skip_queued_runs(slug, "job paused before execution")
-        self.connection.commit()
+        if commit: self.connection.commit()
         return cursor.rowcount == 1
 
-    def archive_job(self, slug: str) -> bool:
+    def archive_job(self, slug: str, *, commit: bool = True) -> bool:
         """Hide a job from scheduling while retaining its immutable run history."""
         cursor = self.connection.execute(
-            "UPDATE jobs SET enabled = 0, archived = 1 WHERE slug = ? AND archived = 0", (slug,)
+            "UPDATE jobs SET enabled = 0, archived = 1, remote_revision = remote_revision + 1 WHERE slug = ? AND archived = 0", (slug,)
         )
         if cursor.rowcount == 1:
             self._skip_queued_runs(slug, "job archived before execution")
-        self.connection.commit()
+        if commit: self.connection.commit()
         return cursor.rowcount == 1
 
     def delete_job(self, slug: str) -> bool:
@@ -476,17 +483,17 @@ class Store:
             self.connection.rollback()
             return None
 
-    def queue_run(self, job_id: int, scheduled_for: str) -> int | None:
+    def queue_run(self, job_id: int, scheduled_for: str, *, commit: bool = True) -> int | None:
         """Persist a due occurrence before an executor claims it."""
         try:
             cursor = self.connection.execute(
                 "INSERT INTO runs(job_id, scheduled_for, status) VALUES (?, ?, 'queued')", (job_id, scheduled_for)
             )
             self.connection.execute("UPDATE jobs SET last_scheduled_at = ? WHERE id = ?", (scheduled_for, job_id))
-            self.connection.commit()
+            if commit: self.connection.commit()
             return cursor.lastrowid
         except sqlite3.IntegrityError:
-            self.connection.rollback()
+            if commit: self.connection.rollback()
             return None
 
     def queued_runs(self):

@@ -117,3 +117,23 @@ actual access. Keep this API bound to loopback.
 
 The MCP bridge enforces its published schemas. Undeclared execution fields and
 shell-task edits, runs, and retries are rejected; use the local UI or CLI for shell tasks.
+
+## Account and remote API
+
+The hosted API uses `Authorization: Bearer <Auth0 access token>` for browser
+routes. Agent routes use the revocable credential returned once during computer
+enrollment. All endpoints are versioned under `/v1`:
+
+- `GET /v1/account` returns the verified account identity.
+- `GET /v1/computers`, `POST /v1/computers/enroll`, and
+  `DELETE /v1/computers/{id}` manage account-owned execution computers.
+- `GET /v1/history` returns the latest acknowledged projections.
+- `POST /v1/commands`, `GET /v1/commands/{id}`, and
+  `DELETE /v1/commands/{id}` submit, inspect, or cancel pending commands.
+- `POST /v1/agent/sync` uploads a sequenced projection and polls commands.
+- `POST /v1/agent/commands/{id}/ack` records an applied or rejected result.
+
+The local dashboard adds `GET /api/account/status`,
+`POST /api/account/session`, and `POST /api/account/claim`. Existing loopback,
+same-origin, and CSRF checks remain in force in addition to the in-memory browser
+account session.

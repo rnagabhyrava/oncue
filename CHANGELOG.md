@@ -1,6 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- Added required Auth0 Google sign-in when an account service is configured.
+- Added explicit installation claiming, revocable computer credentials, outbound
+  cloud synchronization, offline history, and deduplicated remote controls.
+- Added a separate FastAPI/PostgreSQL service and Render blueprint for account-owned
+  computers, snapshots, and 24-hour commands. Gmail mailbox scopes are not used.
+
 ## 0.3.0 — 2026-09-09
+
+- Added reference-file selection before scheduling, with a visible composer action,
+  file validation, removable pending files, and paused creation until uploads finish.
+
+- Reworked the UI with neutral light/dark themes, larger conversation text, roomier
+  navigation, task-state filters, illustrated task starters, and a rounded composer.
+  Improved mobile layouts, keyboard focus, and responsive message content.
 
 - Added flat task projects, inherited project instructions, private versioned `.txt` and
   `.md` references, and run-context snapshots for reproducible retries.

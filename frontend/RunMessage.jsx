@@ -74,10 +74,12 @@ export default function RunMessage({ message, onRetry, onLog, retryMinutes }) {
           <span>
             {run.provider} · {run.model}
           </span>
-          <button onClick={() => onLog(run.id)}>
-            <Terminal size={12} />
-            Execution log
-          </button>
+          {onLog && (
+            <button onClick={() => onLog(run.id)}>
+              <Terminal size={12} />
+              Execution log
+            </button>
+          )}
         </div>
       )}
     </article>

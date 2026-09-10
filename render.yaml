@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: oncue-cloud
+    runtime: python
+    buildCommand: pip install -r cloud_service/requirements.txt
+    startCommand: uvicorn cloud_service.app:create_app --factory --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: oncue-cloud-db
+          property: connectionString
+      - key: AUTH0_DOMAIN
+        sync: false
+      - key: AUTH0_AUDIENCE
+        sync: false
+      - key: AUTH0_CLIENT_ID
+        sync: false
+      - key: ONCUE_WEB_ORIGIN
+        sync: false
+databases:
+  - name: oncue-cloud-db
+    plan: basic-256mb

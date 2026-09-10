@@ -9,6 +9,8 @@ keeps every response in a conversation of its own.
 - Use Codex with ChatGPT, or try OpenCode’s available free models without a login.
 - Read earlier results, retry failures, pause tasks, and export complete history.
 - Schedule from the web UI, command line, or your coding agent through MCP.
+- With the optional account service, sign in with Google to view and control
+  locally executed tasks from another device.
 
 ![OnCue task conversations](docs/screenshots/conversation.png)
 

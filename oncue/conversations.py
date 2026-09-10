@@ -11,10 +11,10 @@ def config(job):
     return json.loads(job['task_config'] or '{}')
 
 
-def message(store, job_id, role, content='', run_id=None):
+def message(store, job_id, role, content='', run_id=None, *, commit=True):
     store.connection.execute('INSERT OR IGNORE INTO messages(job_id,role,content,run_id) VALUES (?,?,?,?)',
                              (job_id,role,content,run_id))
-    store.connection.commit()
+    if commit: store.connection.commit()
 
 
 def history(store, slug, before=None, limit=30):
@@ -38,7 +38,7 @@ def history(store, slug, before=None, limit=30):
     return {'messages':items,'before':rows[min(limit,len(rows))-1]['id'] if has_more else None,'active_runs':active}
 
 
-def queue_message(store, slug, text, overrides=None):
+def queue_message(store, slug, text, overrides=None, *, commit=True, scheduled_for=None, new_slug=None):
     from .tasks import save_task
     if not isinstance(text,str) or not text.strip() or len(text)>16000:
         raise ValueError('Enter a message (up to 16000 characters)')
@@ -46,27 +46,28 @@ def queue_message(store, slug, text, overrides=None):
     if run_now:
         if not slug: raise ValueError('Schedule a task first, then use Run now.')
         from .tasks import queue_manual
-        rid = queue_manual(store, slug)
+        rid = queue_manual(store, slug, scheduled_for=scheduled_for, commit=False)
         job = store.job(slug)
-        message(store, job['id'], 'user', text)
-        message(store, job['id'], 'system', 'Queued to run now. The existing schedule is unchanged.')
+        message(store, job['id'], 'user', text, commit=False)
+        message(store, job['id'], 'system', 'Queued to run now. The existing schedule is unchanged.', commit=False)
+        if commit: store.connection.commit()
         return {'slug': slug, 'run_id': rid}
     settings=get_settings(store)
     if not slug:
         data={'instructions':text,'title':text.splitlines()[0][:60], 'enabled':False,
               'provider':settings['provider'],'model':settings['model'],
               'timezone':settings['timezone'],'mode':'draft',**(overrides or {})}
-        slug=save_task(store,data)
+        slug=save_task(store,data,commit=False,new_slug=new_slug)
     job=store.job(slug)
     if not job: raise ValueError('Task not found or archived')
     if job['runner']=='command':raise ValueError('Use Advanced settings to edit shell tasks. Start a new AI conversation for chat.')
     if store.connection.execute("SELECT 1 FROM runs WHERE job_id=? AND kind='plan' AND status IN ('queued','running')",(job['id'],)).fetchone():
         raise ValueError('Your previous message is still being processed')
-    with store.connection:
-        store.connection.execute("INSERT INTO messages(job_id,role,content) VALUES (?,'user',?)",(job['id'],text))
-        cursor=store.connection.execute("INSERT INTO runs(job_id,scheduled_for,status,kind,input) VALUES (?,?,'queued','plan',?)",
-            (job['id'],'manual:'+datetime.now(timezone.utc).isoformat(),text))
-        rid=cursor.lastrowid
+    store.connection.execute("INSERT INTO messages(job_id,role,content) VALUES (?,'user',?)",(job['id'],text))
+    cursor=store.connection.execute("INSERT INTO runs(job_id,scheduled_for,status,kind,input) VALUES (?,?,'queued','plan',?)",
+        (job['id'],scheduled_for or 'manual:'+datetime.now(timezone.utc).isoformat(),text))
+    rid=cursor.lastrowid
+    if commit: store.connection.commit()
     return {'slug':slug,'run_id':rid}
 
 
@@ -188,7 +189,7 @@ def classify_error(text):
     return 'unknown','The task could not finish. Open its execution log for details or retry later.',False
 
 
-def retry_run(store, run_id, delay_minutes=None, automatic=False):
+def retry_run(store, run_id, delay_minutes=None, automatic=False, *, commit=True):
     from .settings import get_settings
     old=store.connection.execute('SELECT * FROM runs WHERE id=?',(run_id,)).fetchone()
     if not old or old['status'] not in ('failed','timed_out'):
@@ -202,12 +203,12 @@ def retry_run(store, run_id, delay_minutes=None, automatic=False):
     existing=store.connection.execute('SELECT id,status FROM runs WHERE retry_of=?',(run_id,)).fetchone()
     if existing:
         if existing['status'] in ('queued','running'):return existing['id']
-        if existing['status'] in ('failed','timed_out'):return retry_run(store,existing['id'],delay_minutes,automatic)
+        if existing['status'] in ('failed','timed_out'):return retry_run(store,existing['id'],delay_minutes,automatic,commit=commit)
         raise ValueError('This attempt already has a completed or cancelled retry. Use Run now for a new run.')
     at=(datetime.now(timezone.utc)+timedelta(minutes=delay)).isoformat()
     key=f"retry:{'' if automatic else 'manual:'}{run_id}"
-    with store.connection:
-        cur=store.connection.execute('''INSERT OR IGNORE INTO runs(job_id,scheduled_for,status,kind,input,retry_of,retry_at,attempt,config_snapshot)
-            VALUES (?,?,'queued',?,?,?,?,?,?)''',(job['id'],key,old['kind'],old['input'],run_id,at,old['attempt']+1,old['config_snapshot']))
-        rid=cur.lastrowid if cur.rowcount else None
+    cur=store.connection.execute('''INSERT OR IGNORE INTO runs(job_id,scheduled_for,status,kind,input,retry_of,retry_at,attempt,config_snapshot)
+        VALUES (?,?,'queued',?,?,?,?,?,?)''',(job['id'],key,old['kind'],old['input'],run_id,at,old['attempt']+1,old['config_snapshot']))
+    rid=cur.lastrowid if cur.rowcount else None
+    if commit: store.connection.commit()
     return rid

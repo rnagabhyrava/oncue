@@ -57,7 +57,7 @@ export function Field({ label, children, hint }) {
     </label>
   );
 }
-export function Toggle({ label, hint, checked, onChange }) {
+export function Toggle({ label, hint, checked, onChange, disabled = false }) {
   return (
     <label className="toggle-row">
       <span>
@@ -67,6 +67,7 @@ export function Toggle({ label, hint, checked, onChange }) {
       <input
         type="checkbox"
         checked={!!checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
       />
     </label>

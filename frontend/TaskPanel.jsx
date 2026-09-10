@@ -6,6 +6,8 @@ import {
   LoaderCircle,
   Monitor,
   SlidersHorizontal,
+  Paperclip,
+  X,
 } from "lucide-react";
 import { request, formatDate } from "./api";
 import { ErrorNotice, Modal, Field, Toggle } from "./components";
@@ -13,6 +15,8 @@ export default function TaskPanel({
   task,
   settings,
   initialText,
+  remote = false,
+  computerId,
   onClose,
   onSaved,
 }) {
@@ -51,7 +55,11 @@ export default function TaskPanel({
     [next, setNext] = useState(""),
     [providers, setProviders] = useState([]),
     [projects, setProjects] = useState([]),
-    [attachments, setAttachments] = useState([]);
+    [attachments, setAttachments] = useState([]),
+    [pendingFiles, setPendingFiles] = useState([]),
+    [readingFile, setReadingFile] = useState(false);
+  const createdSlug = useRef(null);
+  const uploadedFiles = useRef(new Set());
   const set = (key, value) => setValues((v) => ({ ...v, [key]: value }));
   useEffect(() => {
     let alive = true;
@@ -67,8 +75,13 @@ export default function TaskPanel({
     request("/api/settings")
       .then((d) => alive && setProviders(d.providers))
       .catch(() => {});
-    request("/api/projects").then((d) => alive && setProjects(d.projects)).catch(() => {});
-    if (task) request("/api/tasks/" + task.slug).then((d) => alive && setAttachments(d.attachments || [])).catch(() => {});
+    request("/api/projects")
+      .then((d) => alive && setProjects(d.projects))
+      .catch(() => {});
+    if (task)
+      request("/api/tasks/" + task.slug)
+        .then((d) => alive && setAttachments(d.attachments || []))
+        .catch(() => {});
     return () => {
       alive = false;
     };
@@ -113,28 +126,104 @@ export default function TaskPanel({
         data.sandbox = "read-only";
         data.auto_approve = false;
       }
-      const result = await request(
-        task ? "/api/tasks/" + task.slug : "/api/tasks",
-        task ? "PATCH" : "POST",
-        data,
-      );
-      onSaved(result.slug);
+      let slug = task?.slug || createdSlug.current;
+      if (!slug) {
+        const result = await request("/api/tasks", "POST", {
+          ...data,
+          ...(remote ? { computer_id: computerId } : {}),
+          enabled: pendingFiles.length ? false : data.enabled,
+        });
+        slug = result.slug;
+        createdSlug.current = slug;
+      }
+      // Retain the paused task and successful uploads if an upload fails.
+      // A retry continues the same task, without creating duplicate schedules.
+      for (const file of pendingFiles) {
+        if (uploadedFiles.current.has(file.name)) continue;
+        await request("/api/attachments", "POST", {
+          owner_type: "task",
+          owner: slug,
+          name: file.name,
+          content: file.content,
+        });
+        uploadedFiles.current.add(file.name);
+      }
+      if (task || pendingFiles.length || createdSlug.current) {
+        await request("/api/tasks/" + slug, "PATCH", data);
+      }
+      onSaved(slug);
       onClose();
     } catch (e) {
-      setError(e.message);
+      setError(
+        createdSlug.current && pendingFiles.length
+          ? `${e.message} Your task was saved paused. Try again to finish attaching files and scheduling it.`
+          : e.message,
+      );
     } finally {
       setBusy(false);
     }
   }
-  async function addFile(file) {
-    if (!file) return;
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    let binary = ""; bytes.forEach((b) => binary += String.fromCharCode(b));
-    const result = await request("/api/attachments", "POST", {owner_type:"task",owner:task.slug,name:file.name,content:btoa(binary)});
-    setAttachments((items) => [...items, {id:result.id,name:file.name,size:file.size}]);
+  async function addFiles(files) {
+    setReadingFile(true);
+    setError("");
+    try {
+      const prepared = [];
+      for (const file of files) {
+        if (!/\.(txt|md)$/i.test(file.name))
+          throw new Error("Choose a .txt or .md reference file.");
+        if (file.size > 65536)
+          throw new Error(`${file.name} exceeds the 64 KiB file limit.`);
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        try {
+          new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        } catch {
+          throw new Error(`${file.name} must contain UTF-8 text.`);
+        }
+        let binary = "";
+        bytes.forEach((b) => (binary += String.fromCharCode(b)));
+        prepared.push({
+          name: file.name,
+          size: file.size,
+          content: btoa(binary),
+        });
+      }
+      if (task) {
+        for (const file of prepared) {
+          const result = await request("/api/attachments", "POST", {
+            owner_type: "task",
+            owner: task.slug,
+            name: file.name,
+            content: file.content,
+          });
+          setAttachments((items) => [
+            ...items.filter((item) => item.name !== file.name),
+            { id: result.id, name: file.name, size: file.size },
+          ]);
+        }
+      } else {
+        const merged = new Map(pendingFiles.map((file) => [file.name, file]));
+        for (const file of prepared) merged.set(file.name, file);
+        if (
+          [...merged.values()].reduce((sum, file) => sum + file.size, 0) >
+          131072
+        )
+          throw new Error("Task reference files must total at most 128 KiB.");
+        for (const file of prepared) uploadedFiles.current.delete(file.name);
+        setPendingFiles([...merged.values()]);
+      }
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      setReadingFile(false);
+    }
   }
   return (
-    <Modal title={task ? "Task details" : "Schedule a task"} onClose={onClose}>
+    <Modal
+      title={task ? "Task details" : "Schedule a task"}
+      onClose={() => {
+        if (!busy && !readingFile) onClose();
+      }}
+    >
       <form onSubmit={submit} noValidate>
         <div className="settings-body">
           <Field label="What should happen?">
@@ -157,15 +246,86 @@ export default function TaskPanel({
             />
           </Field>
           <Field label="Project">
-            <select value={values.task_project_id || ""} onChange={(e) => set("task_project_id", e.target.value ? Number(e.target.value) : null)}>
+            <select
+              value={values.task_project_id || ""}
+              onChange={(e) =>
+                set(
+                  "task_project_id",
+                  e.target.value
+                    ? remote
+                      ? e.target.value
+                      : Number(e.target.value)
+                    : null,
+                )
+              }
+            >
               <option value="">Unassigned</option>
-              {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
             </select>
           </Field>
-          {task && <Field label="Reference files" hint="UTF-8 .txt or .md, up to 64 KiB each.">
-            <input type="file" accept=".txt,.md,text/plain,text/markdown" onChange={(e) => addFile(e.target.files[0]).catch((error) => setError(error.message))} />
-            {attachments.map((file) => <small key={file.id}>{file.name} </small>)}
-          </Field>}
+          {!remote && <section className="reference-files" aria-label="Reference files">
+            <div className="reference-heading">
+              <Paperclip size={17} />
+              <strong>Reference files</strong>
+            </div>
+            <p>
+              Add context for your task. UTF-8 .txt or .md files, up to 64 KiB
+              each.
+            </p>
+            <label className="file-picker">
+              <Paperclip size={16} />{" "}
+              {readingFile ? "Reading files…" : "Add files"}
+              <input
+                aria-label="Add reference files"
+                type="file"
+                multiple
+                accept=".txt,.md,text/plain,text/markdown"
+                disabled={busy || readingFile || !!createdSlug.current}
+                onChange={(e) => {
+                  const files = [...e.target.files];
+                  e.target.value = "";
+                  addFiles(files);
+                }}
+              />
+            </label>
+            <ul className="attachment-list">
+              {[...attachments, ...pendingFiles].map((file) => (
+                <li key={file.id || file.name}>
+                  <Paperclip size={14} />
+                  <span>
+                    {file.name}
+                    <small>
+                      {Math.max(1, Math.ceil(file.size / 1024))} KiB ·{" "}
+                      {file.id ? "Attached" : "Ready to attach"}
+                    </small>
+                  </span>
+                  {!file.id && (
+                    <button
+                      type="button"
+                      aria-label={`Remove ${file.name}`}
+                      disabled={busy || readingFile || !!createdSlug.current}
+                      onClick={() =>
+                        setPendingFiles((items) =>
+                          items.filter((item) => item.name !== file.name),
+                        )
+                      }
+                    >
+                      <X size={15} />
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {!task && pendingFiles.length > 0 && (
+              <small>
+                Files will be attached before scheduling is enabled.
+              </small>
+            )}
+          </section>}
           <div className="field-grid">
             <Field label="Repeat">
               <select
@@ -323,6 +483,7 @@ export default function TaskPanel({
               <Field label="Task type">
                 <select
                   value={values.runner}
+                  disabled={remote}
                   onChange={(e) => set("runner", e.target.value)}
                 >
                   <option value="codex">AI task</option>
@@ -363,6 +524,7 @@ export default function TaskPanel({
                 <Field label="File access">
                   <select
                     value={values.sandbox}
+                    disabled={remote}
                     onChange={(e) => {
                       set("sandbox", e.target.value);
                       if (e.target.value === "read-only")
@@ -379,6 +541,7 @@ export default function TaskPanel({
                   <Toggle
                     label="Automatic action review"
                     checked={values.auto_approve}
+                    disabled={remote}
                     onChange={(v) => set("auto_approve", v)}
                   />
                 )}
@@ -390,16 +553,23 @@ export default function TaskPanel({
               onChange={(v) => set("enabled", v)}
             />
             <p className="hint">
-              Each task gets a private working folder automatically.
+              {remote
+                ? "Task type, file access, and automatic approval are changed on the execution computer."
+                : "Each task gets a private working folder automatically."}
             </p>
           </details>
           <ErrorNotice>{error}</ErrorNotice>
         </div>
         <div className="modal-footer">
-          <button type="button" className="quiet" onClick={onClose}>
+          <button
+            type="button"
+            className="quiet"
+            disabled={busy || readingFile}
+            onClick={onClose}
+          >
             Cancel
           </button>
-          <button className="primary" disabled={busy || loading}>
+          <button className="primary" disabled={busy || loading || readingFile}>
             {busy ? (
               <LoaderCircle className="spin" size={15} />
             ) : (

@@ -168,6 +168,24 @@ Type what should happen and when. OnCue asks when important details are missing.
 Use the **+** button or **Task details** for explicit timing and execution controls.
 Each task gets a working folder automatically.
 
+## Sign in and remote access
+
+When an OnCue account service is configured, Google sign-in is required to open
+the local or hosted dashboard. A new or upgraded installation shows a one-time
+claim screen before it associates existing tasks with the signed-in account.
+Claiming is explicit: another account cannot silently take an installation.
+
+The hosted dashboard can show task definitions, conversations, run status, and
+responses while the execution computer is offline. It can create and edit tasks,
+send follow-ups, run or retry work, pause and resume schedules, and archive tasks.
+Commands remain pending until the selected computer acknowledges them and expire
+after 24 hours. With multiple linked computers, choose where new tasks should run.
+
+Execution remains local. Provider logins, diagnostic logs, working folders, and
+reference attachments are never included in cloud synchronization. Revoking a
+computer stops its cloud connection but does not erase or stop its local schedules.
+See `cloud_service/README.md` for Auth0, Google, and Render configuration.
+
 ## Organize work and add references
 
 Create flat projects from the task sidebar to group tasks. Projects are organizational:
