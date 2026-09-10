@@ -14,6 +14,11 @@ keeps every response in a conversation of its own.
 
 ## Get started
 
+The Linux bundle installs with `sh install.sh`, includes Python and both AI
+runtimes, and opens the web UI. See [installation instructions](START.md) for
+downloads, local builds, and clean removal. After installing, launch
+**OnCue** from your application menu or run `oncue open`.
+
 From this checkout, with Python 3.11+:
 
 ```bash

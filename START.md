@@ -28,9 +28,72 @@ opening a browser. `oncue dashboard --port 8766` runs in the foreground.
 The Linux x86_64 bundle includes Python, the React UI, Codex, and OpenCode. It needs
 no separate Python or Node installation and contains no accounts or credentials.
 
-Extract `oncue-linux-x86_64.tar.gz`, then run `./oncue/oncue open`. To install a
-launcher, command, and startup service, run `./oncue/install.sh`. The destination
-is `~/.local/share/oncue/bin`; the command is `~/.local/bin/oncue`.
+Download and run the installer:
+
+```bash
+curl -fsSL https://github.com/rnagabhyrava/oncue/releases/latest/download/install.sh -o install.sh
+sh install.sh
+```
+
+The script downloads the bundle over HTTPS, checks its SHA-256 checksum, installs
+it for your user, starts scheduling, and opens the web UI. No sudo, Python, Node,
+or npm setup is needed. Linux x86_64 with glibc 2.38+ (for example, Ubuntu 24.04+) is required, along with
+`curl` or `wget`, `tar`, and `sha256sum`. A checksum detects download corruption;
+it is not a separate publisher signature.
+
+For an offline install, download the archive and its `.sha256` file from
+[GitHub Releases](https://github.com/rnagabhyrava/oncue/releases), or build locally
+using the steps below. Then install with:
+
+```bash
+sh install.sh --archive dist/oncue-linux-x86_64.tar.gz
+```
+
+Or extract the archive and run `sh oncue/install.sh`. App files go to
+`~/.local/share/oncue/bin`; commands go to `~/.local/bin`. An **OnCue** application
+menu shortcut is added. Installation does not change shell configuration.
+
+### Launch, stop, and update
+
+```bash
+~/.local/bin/oncue open              # Start in background and open the UI
+~/.local/bin/oncue start             # Start without opening a browser
+~/.local/bin/oncue stop              # Stop scheduling; active tasks may finish
+~/.local/bin/oncue install-startup   # Optional: start at Linux sign-in
+```
+
+If `~/.local/bin` is on your PATH, use `oncue open`, or choose **OnCue** from your
+application menu. Closing the browser leaves scheduling running. The default UI
+is at `http://127.0.0.1:8765`; the start command prints its address.
+
+Run the installer again to update. It retains tasks/settings, stops dispatch,
+and refuses replacement while a task is active. Startup failures restore the
+previous app when available. Installer options include `--version v0.3.0`,
+`--no-open`, `--no-start`, `--startup`, and `--prefix /absolute/path`.
+Startup at sign-in requires a systemd user session; manual launch does not.
+
+### Uninstall
+
+```bash
+~/.local/bin/oncue uninstall
+```
+
+This stops scheduling and removes the portable app, its command links, menu
+shortcut, and OnCue login-startup service. Task history, outputs, settings, and
+OnCue's separate provider login stay in `~/.local/share/oncue/data` so you can
+reinstall. Active tasks must finish before uninstalling.
+
+To also permanently delete that default data directory:
+
+```bash
+~/.local/bin/oncue uninstall --purge-data
+```
+
+Shared Codex/OpenCode logins outside OnCue's data directory are retained.
+Custom data directories require manual removal after backup. If invoking the
+uninstaller from source for a custom install, supply `--prefix /absolute/path`.
+For a pip installation, stop OnCue and use that environment's `pip uninstall
+oncue`; the portable uninstaller only removes portable installations.
 
 To build the bundle yourself, install Node 22.12+ / npm and Python 3.11+:
 

@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.3.0 — Unreleased
+## 0.3.0 — 2026-09-09
+
+- Added a checksum-verified single-script Linux bundle installer, application-menu
+  launcher, guarded updates, and portable uninstall with opt-in data deletion.
+  Documented launch, stop, sign-in startup, update, and removal commands.
 
 - Completed the OnCue package/distribution, repository and service-template rename.
   Added guarded data migration with a legacy-path alias, active-worker checks,

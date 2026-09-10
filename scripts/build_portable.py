@@ -3,6 +3,7 @@
 Build prerequisites: Python 3.11+, PyInstaller, npm. Run from the repository root.
 """
 import argparse
+import hashlib
 import os
 import platform
 import shutil
@@ -46,3 +47,9 @@ shutil.copytree(root/'docs',bundle/'docs',dirs_exist_ok=True)
 with tarfile.open(root/'dist/oncue-linux-x86_64.tar.gz','w:gz',compresslevel=1) as archive:
     archive.add(bundle,arcname='oncue')
 print(bundle/'oncue')
+
+archive_path=root/'dist/oncue-linux-x86_64.tar.gz'
+with archive_path.open('rb') as stream:
+    digest=hashlib.file_digest(stream,'sha256').hexdigest()
+archive_path.with_name(archive_path.name+'.sha256').write_text(f'{digest}  {archive_path.name}\n')
+shutil.copy2(root/'install.sh',root/'dist/install.sh')

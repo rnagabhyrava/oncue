@@ -1,3 +1,4 @@
+include install.sh
 include README.md START.md AGENTS.md CONTRIBUTING.md SECURITY.md CHANGELOG.md LICENSE
 recursive-include docs *.md *.png
 recursive-include systemd *.service *.timer *.example
