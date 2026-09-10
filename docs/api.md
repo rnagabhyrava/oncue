@@ -74,11 +74,20 @@ The companion `integrations/oncue/skills/schedule/SKILL.md` can also be installe
 in agents supporting skills. The skill is guidance; the MCP server/CLI is what
 actually persists schedules. Host-specific plugin installation formats vary.
 
-Tools: `create_task`, `update_task`, `list_tasks`, `task_action`, `read_history`,
-`read_response`, `retry_run`, `scheduler_settings`. Inspect `tools/list` for their
-JSON schemas. Creating/updating through MCP starts the local app; the client can
-then exit. If startup fails after creation, inspect the task list before repeating
-creation. The bridge currently uses newline JSON-RPC; no remote MCP endpoint.
+Task tools: `create_task`, `update_task`, `list_tasks`, `task_action`, `delete_task`,
+`send_message`, `read_history`, `read_response`, `retry_run`, and `cancel_run`.
+Project/reference tools: `list_projects`, `create_project`, `update_project`,
+`delete_project`, `list_attachments`, `upload_attachment`, `read_attachment`, and
+`delete_attachment`. `scheduler_settings` reads non-secret defaults. Inspect
+`tools/list` for the JSON schemas. Mutations through MCP start the local app; the
+client can then exit. If startup fails after creation, inspect the task list before
+repeating creation. The bridge currently uses newline JSON-RPC; no remote MCP endpoint.
+
+MCP task creation and updates accept `max_checks` for monitors and
+`task_project_id` for organizational assignment. Permanent task/project deletion is
+separated from ordinary lifecycle actions and requires `confirm_permanent: true`.
+Reference uploads accept base64-encoded UTF-8 `.txt` and `.md` content under the
+same size limits as the UI.
 
 ## Local HTTP API
 

@@ -71,6 +71,21 @@ def queue_message(store, slug, text, overrides=None, *, commit=True, scheduled_f
     return {'slug':slug,'run_id':rid}
 
 
+def cancel_run(store, run_id: int, *, commit: bool = True) -> bool:
+    """Request cancellation while preserving the queued or running attempt."""
+    if type(run_id) is not int:
+        raise ValueError('Run ID must be an integer')
+    run = store.connection.execute('SELECT status FROM runs WHERE id=?',(run_id,)).fetchone()
+    if not run:
+        raise ValueError('Run not found')
+    if run['status'] not in ('queued','running'):
+        raise ValueError('Only queued or running work can be cancelled')
+    store.connection.execute('UPDATE runs SET cancel_requested=1 WHERE id=?',(run_id,))
+    store.connection.execute("UPDATE runs SET status='skipped',finished_at=CURRENT_TIMESTAMP,error='Cancelled by user' WHERE id=? AND status='queued'",(run_id,))
+    if commit: store.connection.commit()
+    return True
+
+
 def context(store, job, max_chars=16000):
     from .tasks import read_output
     rows=store.connection.execute('SELECT * FROM messages WHERE job_id=? ORDER BY id DESC LIMIT 12',(job['id'],)).fetchall()

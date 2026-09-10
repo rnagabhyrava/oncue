@@ -13,7 +13,7 @@ from typing import Any
 
 from .scheduler import LocalScheduler
 from .settings import get_settings, update_settings
-from .conversations import history, queue_message, retry_run
+from .conversations import cancel_run, history, queue_message, retry_run
 from .providers import catalog
 from .auth import start_login, login_state
 from . import runtime
@@ -305,9 +305,7 @@ def _handler(database_path: Path):
                 if len(parts)==5 and parts[1:3]==['api','runs'] and parts[4]=='retry':
                     self._json(202,{'run_id':retry_run(store,int(parts[3]),data.get('minutes',0))});return
                 if len(parts)==5 and parts[1:3]==['api','runs'] and parts[4]=='cancel':
-                    with store.connection:
-                        store.connection.execute("UPDATE runs SET cancel_requested=1 WHERE id=?",(int(parts[3]),))
-                        store.connection.execute("UPDATE runs SET status='skipped',finished_at=CURRENT_TIMESTAMP,error='Cancelled by user' WHERE id=? AND status='queued'",(int(parts[3]),))
+                    cancel_run(store,int(parts[3]))
                     self._json(200,{'ok':True});return
                 if self.path == '/api/preview'  and self.command == 'POST':
                     schedule = from_form(data)
