@@ -87,6 +87,12 @@ storage paths are retained; see [compatibility](compatibility.md).
 The Linux bundle packages Python, native runtimes, static UI, licenses and agent
 integration. `service.py` starts either the source module or frozen executable.
 Startup at sign-in and sleep inhibition are optional local operating-system features.
+The root `install.sh` fetches a release and verifies its checksum; the bundled
+installer stages files before activation. CLI lifecycle commands in `service.py`
+stop dispatch, wait for the app to exit, and reject replacement/removal when
+recorded workers are alive. Desktop launcher creation is independent of systemd.
+Portable uninstall retains task storage unless explicitly asked to purge the
+default directory; shared provider authentication stays outside its scope.
 
 The composer keeps new-task model overrides in draft state and passes them to the
 shared message service; existing-task choices use a partial task update. Exact

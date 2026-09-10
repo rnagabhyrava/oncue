@@ -30,7 +30,12 @@ perform bounded live-provider checks separately before a release.
 
 Install `.[dev]`, run `python -m build`, install the wheel into a fresh environment,
 and verify `oncue --help`. Follow START to build the portable app. Test it outside
-the checkout and keep runtime licenses in the bundle.
+the checkout and keep runtime licenses in the bundle. The builder writes the
+archive, its SHA-256 checksum, and the download installer to `dist/`. Validate the
+bundle with `PYTHONPATH=. python3 scripts/smoke_install.py` (temporary home and
+loopback port; runs one local shell task without contacting an AI provider).
+Attach `install.sh`, `oncue-linux-x86_64.tar.gz`, and
+`oncue-linux-x86_64.tar.gz.sha256` to a GitHub release to enable download installs.
 
 Preserve migrations, original run files, occurrence uniqueness and execution locks.
 Use shared task/provider services instead of duplicate UI or CLI logic. Changes to

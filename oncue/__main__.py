@@ -27,8 +27,13 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     commands = root.add_subparsers(dest="action", required=True)
     commands.add_parser("init")
-    for action in ('open','start','stop','install-startup','mcp'):
+    for action in ('open','start','stop','install-startup','prepare-update','mcp'):
         commands.add_parser(action)
+    launcher=commands.add_parser('install-launcher',help='Add the application menu launcher')
+    launcher.add_argument('--prefix',type=Path)
+    uninstall=commands.add_parser('uninstall',help='Remove the portable app; retain task history by default')
+    uninstall.add_argument('--prefix',type=Path)
+    uninstall.add_argument('--purge-data',action='store_true',help='Also permanently delete default task storage, including the separate OnCue login')
     say=commands.add_parser('say',help='Schedule or discuss a task in natural language')
     say.add_argument('text')
     say.add_argument('--task')
@@ -79,14 +84,20 @@ def main() -> int:
     args = parser().parse_args(None if len(sys.argv)>1 else ['open'])
     store: Store | None = None
     try:
+        if args.action == 'uninstall':
+            from .service import uninstall
+            print(uninstall(args.data_dir,args.prefix,args.purge_data))
+            return 0
         args.data_dir = migrate_data_dir(args.data_dir)
         store = Store(args.data_dir / "scheduler.sqlite3")
         store.initialize()
-        if args.action in ('open','start','stop','install-startup'):
+        if args.action in ('open','start','stop','install-startup','install-launcher','prepare-update'):
             from . import service
             from .migration import migrate_launchers
-            if args.action != "stop": migrate_launchers()
+            if args.action in ("open","start","install-startup"): migrate_launchers()
             if args.action=='stop':service.stop(args.data_dir)
+            elif args.action=='prepare-update':service.prepare_update(args.data_dir)
+            elif args.action=='install-launcher':print(service.install_launcher(args.data_dir,args.prefix))
             elif args.action=='install-startup':print(service.install_startup(args.data_dir))
             else:print(service.start(args.data_dir,open_window=args.action=='open'))
         elif args.action=='settings':
@@ -196,7 +207,7 @@ def main() -> int:
         elif args.action == "dashboard":
             serve(store, args.host, args.port)
         return 0
-    except (ValueError, sqlite3.Error) as error:
+    except (ValueError, sqlite3.Error, OSError, subprocess.SubprocessError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 2
     finally:
