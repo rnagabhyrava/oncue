@@ -3,27 +3,7 @@
 OnCue runs scheduled AI tasks on your computer and keeps their results. You do not
 need to create a project, register a connection, or manage task folders.
 
-## Run from this checkout
-
-Use Linux and Python 3.11 or newer:
-
-```bash
-python3 -m oncue open
-```
-
-For an installed Python command:
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install .
-.venv/bin/oncue open
-```
-
-`open` starts the app in the background and opens its UI. Closing the browser does
-not stop scheduling. `oncue stop` stops the app; `oncue start` starts it without
-opening a browser. `oncue dashboard --port 8766` runs in the foreground.
-
-## Use the bundled app
+## Install the bundled app
 
 The Linux x86_64 bundle includes Python, the React UI, Codex, and OpenCode. It needs
 no separate Python or Node installation and contains no accounts or credentials.
@@ -37,17 +17,21 @@ sh install.sh
 
 The script downloads the bundle over HTTPS, checks its SHA-256 checksum, installs
 it for your user, starts scheduling, and opens the web UI. No sudo, Python, Node,
-or npm setup is needed. Linux x86_64 with glibc 2.38+ (for example, Ubuntu 24.04+) is required, along with
-`curl` or `wget`, `tar`, and `sha256sum`. A checksum detects download corruption;
+or npm setup is needed. Linux x86_64 with glibc 2.38+ (for example, Ubuntu
+24.04+) is required, along with `curl` or `wget`, `tar`, and `sha256sum`. A checksum detects download corruption;
 it is not a separate publisher signature.
 
-For an offline install, download the archive and its `.sha256` file from
-[GitHub Releases](https://github.com/rnagabhyrava/oncue/releases), or build locally
-using the steps below. Then install with:
+For an offline install, download `install.sh`, `oncue-linux-x86_64.tar.gz`, and
+`oncue-linux-x86_64.tar.gz.sha256` from the same
+[GitHub release](https://github.com/rnagabhyrava/oncue/releases). Put them in one
+folder, open a terminal there, and run:
 
 ```bash
-sh install.sh --archive dist/oncue-linux-x86_64.tar.gz
+sh install.sh --archive ./oncue-linux-x86_64.tar.gz
 ```
+
+For a locally built bundle, run `sh install.sh --archive
+dist/oncue-linux-x86_64.tar.gz` from the checkout instead.
 
 Or extract the archive and run `sh oncue/install.sh`. App files go to
 `~/.local/share/oncue/bin`; commands go to `~/.local/bin`. An **OnCue** application
@@ -92,8 +76,37 @@ To also permanently delete that default data directory:
 Shared Codex/OpenCode logins outside OnCue's data directory are retained.
 Custom data directories require manual removal after backup. If invoking the
 uninstaller from source for a custom install, supply `--prefix /absolute/path`.
-For a pip installation, stop OnCue and use that environment's `pip uninstall
-oncue`; the portable uninstaller only removes portable installations.
+For a pip installation, stop OnCue with that environment's command and uninstall
+from the same environment, for example:
+
+```bash
+.venv/bin/oncue stop
+.venv/bin/pip uninstall oncue
+```
+
+This retains task data. The portable uninstaller only removes portable installs.
+
+## Run from this checkout
+
+Use Linux and Python 3.11 or newer:
+
+```bash
+python3 -m oncue open
+```
+
+For an installed Python command:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install .
+.venv/bin/oncue open
+```
+
+`open` starts the app in the background and opens its UI. Closing the browser does
+not stop scheduling. `oncue stop` stops the app; `oncue start` starts it without
+opening a browser. `oncue dashboard --port 8766` runs in the foreground.
+
+## Build the bundle
 
 To build the bundle yourself, install Node 22.12+ / npm and Python 3.11+:
 

@@ -5,6 +5,14 @@ The product, Python package, distribution, repository and primary command are
 
 Data now lives in `~/.local/share/oncue/data`; bundled executables live alongside
 it in `~/.local/share/oncue/bin`. `ONCUE_DATA` or `--data-dir` selects a custom store.
+The installer’s `--prefix` changes the app/command location, not the data directory.
+See [START.md](../START.md) for the download installer and lifecycle commands.
+
+`oncue uninstall` retains task storage and migration aliases. With `--purge-data`,
+it deletes the default data directory and its matching legacy alias; shared
+provider logins outside that directory remain. Existing custom or legacy timer
+and worker units are compatibility interfaces: inspect and disable any you
+configured separately before removing their executable or data.
 
 On first launch, an existing `~/.local/share/codex-local-scheduler` directory is
 moved intact to the new data location. The old path becomes a symlink so saved
